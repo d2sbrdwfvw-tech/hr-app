@@ -560,13 +560,8 @@ async function aSet(box,re){
   const st=S.settings;
   const del=(tb,col,val,label)=>`<button class="btn ghost sm" data-del="${tb}|${col}|${val}">حذف</button>`;
   box.innerHTML=`
-  <h2>الفروع ومواقع البصمة</h2><div class="card list">${S.branches.map(b=>`<div class="item"><div class="main"><div class="t">${esc(b.name)}</div><div class="small muted num" dir="ltr" style="text-align:right">${b.latitude.toFixed(5)}, ${b.longitude.toFixed(5)} · ${b.radius_m}m</div></div>${del('branches','id',b.id)}</div>`).join('')||'<div class="empty">أضف أول فرع عشان يقدر الموظفين يسجلون حضور</div>'}</div>
-  <form id="bf" class="card stack" style="margin-top:10px"><b>إضافة فرع</b>
-   <label class="f">اسم الفرع<input name="name" required placeholder="المقر الرئيسي"></label>
-   <div class="grid2"><label class="f">خط العرض<input name="latitude" id="blat" required inputmode="decimal" dir="ltr"></label><label class="f">خط الطول<input name="longitude" id="blng" required inputmode="decimal" dir="ltr"></label></div>
-   <button type="button" class="btn ghost" id="here">${I.pin.replace('<svg','<svg style="width:16px;height:16px;vertical-align:-3px"')} استخدم موقعي الحالي (وأنت في الفرع)</button>
-   <label class="f">نطاق السماح بالمتر<input type="number" name="radius_m" value="150" min="20"></label>
-   <button class="btn">إضافة الفرع</button></form>
+  <h2>الفروع ومواقع البصمة</h2><div class="card list">${S.branches.map(b=>`<div class="item"><div class="main"><div class="t">${esc(b.name)}</div><div class="small muted">نطاق البصمة ${b.radius_m} متر</div></div><div class="row"><button class="btn ghost sm" data-eb="${b.id}">تعديل</button>${del('branches','id',b.id)}</div></div>`).join('')||'<div class="empty">أضف أول فرع عشان يقدر الموظفين يسجلون حضور</div>'}</div>
+  <button class="btn block" id="addb" style="margin-top:10px">${I.pin.replace('<svg','<svg style="width:18px;height:18px;vertical-align:-4px"')} إضافة فرع من الخريطة</button>
 
   <h2>الورديات</h2><div class="card list">${S.shifts.map(s=>`<div class="item"><div class="main"><div class="t">${esc(s.name)}</div><div class="small muted num">${s.start_time.slice(0,5)} - ${s.end_time.slice(0,5)} · سماح ${s.grace_minutes} د · ${s.work_days.map(d=>DAYS[d]).join('، ')}</div></div>${del('shifts','id',s.id)}</div>`).join('')||'<div class="empty">ما فيه ورديات</div>'}</div>
   <form id="sf" class="card stack" style="margin-top:10px"><b>إضافة وردية</b>
@@ -592,9 +587,8 @@ async function aSet(box,re){
    <button class="btn">حفظ الإعدادات</button></form>`;
 
   const after=async msg=>{toast(msg);await loadRefs();re()};
-  $('#here').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{const p=await getPos();$('#blat').value=p.coords.latitude.toFixed(6);$('#blng').value=p.coords.longitude.toFixed(6);toast(`تم أخذ موقعك (دقة ±${Math.round(p.coords.accuracy)} م)`)}catch(err){toast(geoErr(err),'bad')}b.disabled=false};
-  $('#bf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);f.latitude=Number(f.latitude);f.longitude=Number(f.longitude);f.radius_m=Number(f.radius_m||150);
-    if(isNaN(f.latitude)||isNaN(f.longitude))return toast('الإحداثيات غير صحيحة','bad');const {error}=await sb.from('branches').insert(f);if(!fail(error))after('تمت إضافة الفرع')};
+  $('#addb').onclick=()=>branchSheet(null,after);
+  box.querySelectorAll('[data-eb]').forEach(b=>b.onclick=()=>branchSheet(S.branches.find(x=>x.id===b.dataset.eb),after));
   $('#sf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);f.grace_minutes=Number(f.grace_minutes||0);f.work_days=[...e.target.querySelectorAll('[data-wd]:checked')].map(c=>Number(c.dataset.wd));
     const {error}=await sb.from('shifts').insert(f);if(!fail(error))after('تمت إضافة الوردية')};
   $('#df').onsubmit=async e=>{e.preventDefault();const {error}=await sb.from('departments').insert(form(e.target));if(!fail(error))after('تمت إضافة القسم')};
@@ -605,6 +599,74 @@ async function aSet(box,re){
   box.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{const [tb,col,val]=b.dataset.del.split('|');
     if(!confirm('متأكد من الحذف؟'))return;const {error}=await sb.from(tb).delete().eq(col,val);
     if(error&&/foreign key/i.test(error.message))return toast('ما يمكن الحذف لأنه مرتبط بموظفين أو سجلات','bad');if(!fail(error))after('تم الحذف')});
+}
+
+/* ---------- خريطة الفروع ---------- */
+let leafletP;
+function loadLeaflet(){
+  if(window.L)return Promise.resolve();
+  if(leafletP)return leafletP;
+  leafletP=new Promise((res,rej)=>{
+    const css=document.createElement('link');css.rel='stylesheet';css.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';document.head.appendChild(css);
+    const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';s.onload=res;s.onerror=()=>{leafletP=null;rej()};document.head.appendChild(s);
+  });
+  return leafletP;
+}
+function parseCoords(t){
+  t=normDigitsKeep(String(t||''));
+  const pats=[/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/,/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/,/[?&](?:q|query|ll|center|destination)=(-?\d+\.\d+)(?:,|%2C)\s*(-?\d+\.\d+)/i,/(-?\d{1,2}\.\d+)\s*[,،]\s*(-?\d{1,3}\.\d+)/];
+  for(const p of pats){const m=t.match(p);if(m){const a=+m[1],b=+m[2];if(Math.abs(a)<=90&&Math.abs(b)<=180)return [a,b]}}
+  return null;
+}
+function normDigitsKeep(s){return s.replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/٫/g,'.')}
+function branchSheet(b,after){
+  const lat0=b?.latitude??24.7136,lng0=b?.longitude??46.6753;
+  sheet(`<form id="bsf" class="stack">
+    <h3>${b?'تعديل الفرع':'فرع جديد'}</h3>
+    <label class="f">اسم الفرع<input name="name" required value="${esc(b?.name||'')}" placeholder="المقر الرئيسي"></label>
+    <div class="row" style="flex-wrap:nowrap"><input id="bq" placeholder="ابحث عن حي أو مكان أو الصق رابط قوقل ماب" style="flex:1"><button type="button" class="btn ghost sm" id="bqs">بحث</button></div>
+    <div id="bres" class="list small" hidden></div>
+    <div id="bmap" style="height:300px;border-radius:12px;border:1px solid var(--line);overflow:hidden;background:var(--surface-2)"><div class="empty"><span class="spin"></span> جاري تحميل الخريطة</div></div>
+    <button type="button" class="btn ghost" id="bhere">${I.pin.replace('<svg','<svg style="width:16px;height:16px;vertical-align:-3px"')} موقعي الحالي (إذا كنت في الفرع)</button>
+    <p class="small muted" style="margin:0">اسحب الدبوس الأحمر أو اضغط على الخريطة لين يصير على مبنى الفرع بالضبط. الدائرة هي النطاق اللي يقدر الموظف يبصم منه.</p>
+    <label class="f">نطاق البصمة: <b id="rv" class="num">${b?.radius_m||150}</b> متر<input type="range" name="radius_m" id="br" min="30" max="1000" step="10" value="${b?.radius_m||150}" style="padding:0"></label>
+    <div class="row"><button class="btn" style="flex:1">${b?'حفظ التعديل':'إضافة الفرع'}</button><button type="button" class="btn ghost" id="bx">إلغاء</button></div>
+  </form>`,
+  async (el,close)=>{
+    el.querySelector('#bx').onclick=close;
+    let pos=[lat0,lng0],map,marker,circle;
+    const rIn=el.querySelector('#br'),rv=el.querySelector('#rv');
+    const setPos=(p,zoom)=>{pos=p;if(!map)return;marker.setLatLng(p);circle.setLatLng(p);if(zoom)map.setView(p,zoom);else map.panTo(p)};
+    rIn.oninput=()=>{rv.textContent=rIn.value;circle&&circle.setRadius(+rIn.value)};
+    try{await loadLeaflet()}catch(e){el.querySelector('#bmap').innerHTML='<div class="alert bad">تعذر تحميل الخريطة، تأكد من الإنترنت وحاول مرة ثانية</div>';return}
+    const mEl=el.querySelector('#bmap');mEl.innerHTML='';
+    map=L.map(mEl,{zoomControl:true,attributionControl:true}).setView(pos,b?17:12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+    const icon=L.divIcon({className:'',html:'<div style="width:26px;height:26px;border-radius:50% 50% 50% 0;background:#d23c2f;transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>',iconSize:[26,26],iconAnchor:[13,26]});
+    marker=L.marker(pos,{draggable:true,icon}).addTo(map);
+    circle=L.circle(pos,{radius:+rIn.value,color:'#0e5c63',fillColor:'#0e5c63',fillOpacity:.15,weight:2}).addTo(map);
+    marker.on('drag',e=>{pos=[e.latlng.lat,e.latlng.lng];circle.setLatLng(e.latlng)});
+    map.on('click',e=>setPos([e.latlng.lat,e.latlng.lng]));
+    setTimeout(()=>map.invalidateSize(),250);
+    el.querySelector('#bhere').onclick=async e=>{const btn=e.currentTarget;btn.disabled=true;
+      try{const p=await getPos();setPos([p.coords.latitude,p.coords.longitude],18);toast(`تم تحديد موقعك (دقة ±${Math.round(p.coords.accuracy)} م)`)}catch(err){toast(geoErr(err),'bad')}btn.disabled=false};
+    const res=el.querySelector('#bres');
+    const search=async()=>{const q=el.querySelector('#bq').value.trim();if(!q)return;
+      const c=parseCoords(q);if(c){setPos(c,18);res.hidden=true;toast('تم تحديد الموقع من الرابط');return}
+      if(/goo\.gl|maps\.app/i.test(q)){res.hidden=false;res.innerHTML='<div class="alert warn">الروابط المختصرة ما تنقرأ. في قوقل ماب اضغط مطولاً على مكان الفرع، وانسخ الأرقام اللي تطلع فوق (مثل 24.71, 46.67) والصقها هنا.</div>';return}
+      res.hidden=false;res.innerHTML='<div class="empty"><span class="spin"></span></div>';
+      try{const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=6&countrycodes=sa&accept-language=ar&q='+encodeURIComponent(q));const d=await r.json();
+        if(!d.length){res.innerHTML='<div class="empty">ما لقينا نتائج، جرّب اسم الحي أو المدينة</div>';return}
+        res.innerHTML=d.map((x,i)=>`<div class="item" data-i="${i}" style="cursor:pointer;padding:8px 0">${esc(x.display_name)}</div>`).join('');
+        res.querySelectorAll('[data-i]').forEach(it=>it.onclick=()=>{const x=d[+it.dataset.i];setPos([+x.lat,+x.lon],17);res.hidden=true});
+      }catch(e){res.innerHTML='<div class="alert bad">تعذر البحث، حاول مرة ثانية</div>'}};
+    el.querySelector('#bqs').onclick=search;
+    el.querySelector('#bq').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();search()}};
+    el.querySelector('#bsf').onsubmit=async e=>{e.preventDefault();
+      const row={name:e.target.name.value.trim(),latitude:+pos[0].toFixed(6),longitude:+pos[1].toFixed(6),radius_m:+rIn.value};
+      const {error}=b?await sb.from('branches').update(row).eq('id',b.id):await sb.from('branches').insert(row);
+      if(fail(error))return;close();after(b?'تم حفظ الفرع':'تمت إضافة الفرع')};
+  });
 }
 
 /* ---------- التشغيل ---------- */
