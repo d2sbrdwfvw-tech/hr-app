@@ -214,10 +214,11 @@ function vAuth(mode='in'){
   app.innerHTML=`<div class="auth">
     <div class="logo">${I.finger}</div>
     <h1>${mode==='in'?'تسجيل الدخول':'حساب موظف جديد'}</h1>
-    <p class="muted">${mode==='in'?'ادخل بإيميلك وكلمة المرور':'سجّل بياناتك، وبعدها تفعّل الموارد البشرية حسابك'}</p>
+    <p class="muted">${mode==='in'?'ادخل برقم الهوية أو الإقامة وكلمة المرور':'سجّل بياناتك، وبعدها تفعّل الموارد البشرية حسابك'}</p>
     <form id="af" class="stack card">
       ${mode==='up'?'<label class="f">الاسم الكامل<input name="full_name" required autocomplete="name"></label>':''}
-      <label class="f">الإيميل<input name="email" type="email" required autocomplete="email" dir="ltr"></label>
+      <label class="f">رقم الهوية أو الإقامة<input name="nid" required inputmode="numeric" autocomplete="username" placeholder="10 أرقام" dir="ltr"></label>
+      ${mode==='up'?'<label class="f">رقم الجوال<input name="phone" type="tel" required inputmode="tel" autocomplete="tel" placeholder="05XXXXXXXX" dir="ltr"></label>':''}
       <label class="f">كلمة المرور<input name="password" type="password" required minlength="6" autocomplete="${mode==='in'?'current-password':'new-password'}" dir="ltr"></label>
       <button class="btn block" id="ab">${mode==='in'?'دخول':'إنشاء الحساب'}</button>
       <p id="amsg" class="small" hidden></p>
@@ -227,17 +228,31 @@ function vAuth(mode='in'){
   </div>`;
   $('#sw').onclick=e=>{e.preventDefault();vAuth(mode==='in'?'up':'in')};
   $('#af').onsubmit=async e=>{e.preventDefault();const f=form(e.target),b=$('#ab'),m=$('#amsg');b.disabled=true;m.hidden=true;
+    const bad=t=>{b.disabled=false;m.hidden=false;m.className='alert bad small';m.textContent=t};
+    const nid=normDigits(f.nid);
+    if(!/^[12]\d{9}$/.test(nid))return bad('رقم الهوية أو الإقامة لازم يكون 10 أرقام ويبدأ بـ 1 أو 2');
+    let ph=null;
+    if(mode==='up'){ph=normPhone(f.phone);if(!ph)return bad('اكتب رقم جوال سعودي صحيح، مثل 0501234567')}
+    const email=nid+'@id.hr-app.com';
     let r;
-    if(mode==='in') r=await sb.auth.signInWithPassword({email:f.email.trim(),password:f.password});
-    else r=await sb.auth.signUp({email:f.email.trim(),password:f.password,options:{data:{full_name:f.full_name.trim()}}});
+    if(mode==='in') r=await sb.auth.signInWithPassword({email,password:f.password});
+    else r=await sb.auth.signUp({email,password:f.password,options:{data:{full_name:f.full_name.trim(),phone:'0'+ph.slice(3),national_id:nid}}});
     b.disabled=false;
     if(r.error){m.hidden=false;m.className='alert bad small';m.textContent=authMsg(r.error.message);return}
     if(mode==='up'&&!r.data.session){m.hidden=false;m.className='alert info small';m.textContent='تم إنشاء الحساب. افتح الإيميل اللي وصلك واضغط رابط التفعيل، ثم ارجع وسجّل دخول.'}
   };
 }
+function normDigits(s){return String(s||'').replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/\D/g,'')}
+function normPhone(s){
+  s=normDigits(s);
+  if(s.startsWith('00'))s=s.slice(2);
+  if(s.startsWith('966'))s=s.slice(3);
+  if(s.startsWith('0'))s=s.slice(1);
+  return /^5\d{8}$/.test(s)?'966'+s:null;
+}
 function authMsg(m){
-  if(/Invalid login/i.test(m))return 'الإيميل أو كلمة المرور غير صحيحة';
-  if(/already registered/i.test(m))return 'هذا الإيميل مسجل من قبل، سجّل دخول';
+  if(/Invalid login/i.test(m))return 'رقم الهوية أو كلمة المرور غير صحيحة';
+  if(/already registered/i.test(m))return 'رقم الهوية هذا مسجل من قبل، سجّل دخول';
   if(/Email not confirmed/i.test(m))return 'لازم تفعّل الإيميل أولاً من الرسالة اللي وصلتك';
   if(/Password should/i.test(m))return 'كلمة المرور لازم تكون 6 أحرف على الأقل';
   return m;
@@ -483,9 +498,9 @@ async function aAtt(box,re){
 
 async function aEmps(box,re){
   const q=(S.sub.q||'').trim();
-  const list=S.profiles.filter(p=>!q||(p.full_name+' '+(p.email||'')+' '+(p.employee_no||'')).includes(q));
+  const list=S.profiles.filter(p=>!q||(p.full_name+' '+(p.phone||'')+' '+(p.employee_no||'')+' '+(p.national_id||'')).includes(q));
   box.innerHTML=`<div class="alert info" style="margin-top:6px">لإضافة موظف: أرسل له رابط التطبيق ليسجل حساب، وبعدها يظهر هنا وتكمل بياناته (الفرع والوردية والراتب).</div>
-   <h2>الموظفين (${S.profiles.length})</h2><input id="sq" placeholder="بحث بالاسم أو الإيميل أو الرقم الوظيفي" value="${esc(q)}">
+   <h2>الموظفين (${S.profiles.length})</h2><input id="sq" placeholder="بحث بالاسم أو الهوية أو الجوال" value="${esc(q)}">
    <div class="card list" style="margin-top:12px">${list.map(p=>`<div class="item" data-e="${p.id}" style="cursor:pointer"><div class="main">
      <div class="t">${esc(p.full_name)} ${!p.is_active?'<span class="pill p-mute">موقوف</span>':''}</div>
      <div class="small muted">${esc(p.job_title||'')}${p.job_title?' · ':''}${esc(S.departments.find(d=>d.id===p.department_id)?.name||'بدون قسم')}</div></div>
@@ -495,9 +510,11 @@ async function aEmps(box,re){
 }
 function editEmp(p,re){
   const sel=(n,arr,v)=>`<select name="${n}">${opts(arr,v)}</select>`;
-  sheet(`<form id="ef" class="stack"><div class="row between"><h3>${esc(p.full_name)}</h3><span class="small muted" dir="ltr">${esc(p.email)}</span></div>
+  sheet(`<form id="ef" class="stack"><div class="row between"><h3>${esc(p.full_name)}</h3><span class="small muted" dir="ltr">${esc(p.national_id||'')}</span></div>
     <div class="grid2"><label class="f">الاسم<input name="full_name" value="${esc(p.full_name)}" required></label><label class="f">الرقم الوظيفي<input name="employee_no" value="${esc(p.employee_no||'')}"></label>
     <label class="f">المسمى الوظيفي<input name="job_title" value="${esc(p.job_title||'')}"></label><label class="f">الجوال<input name="phone" value="${esc(p.phone||'')}" dir="ltr" inputmode="tel"></label>
+    <label class="f">رقم الهوية / الإقامة<input value="${esc(p.national_id||'')}" dir="ltr" disabled></label>
+    <label class="f">انتهاء الهوية / الإقامة<input type="date" name="id_expiry" value="${p.id_expiry||''}"></label>
     <label class="f">القسم${sel('department_id',S.departments,p.department_id)}</label><label class="f">الفرع (موقع البصمة)${sel('branch_id',S.branches,p.branch_id)}</label>
     <label class="f">الوردية${sel('shift_id',S.shifts,p.shift_id)}</label><label class="f">المدير المباشر${sel('manager_id',S.profiles.filter(x=>x.id!==p.id),p.manager_id)}</label>
     <label class="f">الصلاحية<select name="role">${Object.entries(ROLES).map(([k,l])=>`<option value="${k}" ${p.role===k?'selected':''}>${l}</option>`).join('')}</select></label>
