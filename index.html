@@ -394,15 +394,27 @@ async function vReq(v){
 }
 
 /* ---------- رواتبي ---------- */
+function absText(p){const t=[];const mult=Number(S.settings?.absence_multiplier??2);
+  if(p.absent_days)t.push(`${p.absent_days} غياب × ${mult}`);if(p.late_absent_days)t.push(`${p.late_absent_days} تأخير كغياب`);if(p.unpaid_leave_days)t.push(`${p.unpaid_leave_days} إجازة بدون راتب`);
+  return t.join(' + ')||'0'}
 function slipHTML(p,title){const L=(l,n,neg)=>Number(n)?`<div class="line ${neg?'neg':''}"><span>${l}</span><span class="num">${neg?'- ':''}${money(n)}</span></div>`:'';
   return `<div class="card slip"><div class="row between"><h3>${title}</h3>${p.payroll_runs?pill(PAY,p.payroll_runs.status):''}</div>
    ${L('الراتب الأساسي',p.basic)}${L('بدل السكن',p.housing)}${L('بدل النقل',p.transport)}${L('بدلات أخرى',p.other_allowances)}${L('إضافات',p.additions)}
-   ${L(`خصم التأخير (${p.late_minutes} د)`,p.late_deduction,1)}${L(`خصم الغياب (${p.absent_days} يوم)`,p.absence_deduction,1)}${L('التأمينات الاجتماعية',p.gosi_deduction,1)}${L('خصومات أخرى',p.other_deductions,1)}
+   ${L(`خصم التأخير (${p.late_minutes} دقيقة)`,p.late_deduction,1)}${L(`خصم الغياب (${absText(p)})`,p.absence_deduction,1)}${L('التأمينات الاجتماعية',p.gosi_deduction,1)}${L('خصومات أخرى',p.other_deductions,1)}
    <div class="line net"><span>صافي الراتب</span><span class="num">${money(p.net)} ريال</span></div></div>`}
 async function vPay(v){
   const {data}=await sb.from('payslips').select('*,payroll_runs!inner(year,month,status)').eq('employee_id',S.me.id);
   const rows=(data||[]).sort((a,b)=>(b.payroll_runs.year*100+b.payroll_runs.month)-(a.payroll_runs.year*100+a.payroll_runs.month));
-  v.innerHTML=`<h2>قسائم الراتب</h2><div class="stack">${rows.length?rows.map(p=>slipHTML(p,`${MONTHS[p.payroll_runs.month-1]} ${p.payroll_runs.year}`)).join(''):'<div class="card empty">ما فيه قسائم معتمدة للحين</div>'}</div>`;
+  const ym=monthNow(),[cy,cm]=ym.split('-').map(Number);
+  const {data:cur}=await sb.rpc('calc_pay',{p_emp:S.me.id,p_year:cy,p_month:cm});const c=(cur||[])[0];
+  const live=c?`<h2>خصوماتك هذا الشهر حتى اليوم</h2><div class="card slip">
+    <div class="line"><span>دقائق التأخير</span><span class="num">${c.o_late_minutes} د · <b style="color:var(--bad)">${money(c.o_late_deduction)}</b></span></div>
+    <div class="line"><span>تأخير احتُسب غياب</span><span class="num">${c.o_late_absent_days} يوم</span></div>
+    <div class="line"><span>أيام غياب بدون عذر</span><span class="num">${c.o_absent_days} يوم</span></div>
+    <div class="line"><span>خصم الغياب</span><span class="num" style="color:var(--bad)">${money(c.o_absence_deduction)}</span></div>
+    <div class="line net"><span>إجمالي الخصومات</span><span class="num" style="color:var(--bad)">${money(Number(c.o_late_deduction)+Number(c.o_absence_deduction))} ريال</span></div>
+    <p class="small muted" style="margin:6px 0 0">أجر يومك ${money(c.o_daily_wage)} وأجر ساعتك ${money(c.o_hour_wage)} ريال. يتحدث الحساب تلقائياً مع كل حضور.</p></div>`:'';
+  v.innerHTML=live+`<h2>قسائم الراتب</h2><div class="stack">${rows.length?rows.map(p=>slipHTML(p,`${MONTHS[p.payroll_runs.month-1]} ${p.payroll_runs.year}`)).join(''):'<div class="card empty">ما فيه قسائم معتمدة للحين</div>'}</div>`;
 }
 
 /* ---------- الموافقات ---------- */
@@ -534,17 +546,22 @@ function editEmp(p,re){
 
 async function aPayroll(box,re){
   const ym=S.sub.pm||monthNow();const [y,m]=ym.split('-').map(Number);
-  const {data:run}=await sb.from('payroll_runs').select('*').eq('year',y).eq('month',m).maybeSingle();
+  let {data:run}=await sb.from('payroll_runs').select('*').eq('year',y).eq('month',m).maybeSingle();
+  if((!run||run.status==='draft')&&!S.sub.noAuto){
+    box.innerHTML='<div class="empty"><span class="spin"></span> جاري تحديث الحساب</div>';
+    const {error}=await sb.rpc('generate_payroll',{p_year:y,p_month:m});
+    if(!fail(error))({data:run}=await sb.from('payroll_runs').select('*').eq('year',y).eq('month',m).maybeSingle());
+  }
   let slips=[];
   if(run){const {data}=await sb.from('payslips').select('*,profiles(full_name,iban,employee_no)').eq('run_id',run.id);slips=(data||[]).sort((a,b)=>a.profiles.full_name.localeCompare(b.profiles.full_name,'ar'))}
   const tot=slips.reduce((s,p)=>s+Number(p.net),0);
-  box.innerHTML=`<h2>مسير الرواتب</h2><div class="grid2"><input type="month" id="pm" value="${ym}"><button class="btn" id="gen" ${run&&run.status!=='draft'?'disabled':''}>${run?'إعادة الحساب':'إنشاء المسير'}</button></div>
-   <p class="small muted">يحسب النظام الغياب والتأخير والتأمينات تلقائياً من سجلات الحضور. تقدر تضيف إضافات أو خصومات يدوية لكل موظف قبل الاعتماد.</p>
+  box.innerHTML=`<h2>مسير الرواتب</h2><div class="grid2"><input type="month" id="pm" value="${ym}"><button class="btn ghost" id="gen" ${run&&run.status!=='draft'?'disabled':''}>تحديث الحساب</button></div>
+   <p class="small muted">المسير يتحدث تلقائياً من الحضور كل ما تفتحه. الإضافات والخصومات اليدوية تبقى محفوظة. بعد الاعتماد ما يتغير.</p>
    ${run?`<div class="card"><div class="row between"><div><div class="muted small">الإجمالي · ${slips.length} موظف</div><div class="num" style="font:700 22px var(--display)">${money(tot)} ريال</div></div>${pill(PAY,run.status)}</div>
      <div class="row" style="margin-top:12px">${run.status==='draft'?'<button class="btn" id="apr">اعتماد المسير</button>':''}${run.status==='approved'?'<button class="btn" id="paid">تأكيد الصرف</button>':''}<button class="btn ghost" id="csv">ملف البنك (Excel)</button></div></div>
-     <div class="card tbl" style="margin-top:12px"><table><thead><tr><th>الموظف</th><th>الإجمالي</th><th>غياب</th><th>تأخير</th><th>تأمينات</th><th>إضافات</th><th>خصومات</th><th>الصافي</th></tr></thead><tbody>
+     <div class="card tbl" style="margin-top:12px"><table><thead><tr><th>الموظف</th><th>الإجمالي</th><th>التأخير</th><th>الغياب</th><th>تأمينات</th><th>إضافات</th><th>خصومات</th><th>الصافي</th></tr></thead><tbody>
      ${slips.map(p=>{const gross=Number(p.basic)+Number(p.housing)+Number(p.transport)+Number(p.other_allowances);const ro=run.status!=='draft'?'disabled':'';
-      return `<tr><td>${esc(p.profiles.full_name)}</td><td class="num">${money(gross)}</td><td class="num">${p.absent_days} ي / ${money(p.absence_deduction)}</td><td class="num">${money(p.late_deduction)}</td><td class="num">${money(p.gosi_deduction)}</td>
+      return `<tr><td>${esc(p.profiles.full_name)}</td><td class="num">${money(gross)}</td><td class="num">${p.late_minutes} د<br><b>${money(p.late_deduction)}</b></td><td class="num">${absText(p)}<br><b>${money(p.absence_deduction)}</b></td><td class="num">${money(p.gosi_deduction)}</td>
       <td><input type="number" step="0.01" value="${p.additions}" data-s="${p.id}" data-k="additions" ${ro}></td><td><input type="number" step="0.01" value="${p.other_deductions}" data-s="${p.id}" data-k="other_deductions" ${ro}></td><td class="num"><b>${money(p.net)}</b></td></tr>`}).join('')}
      </tbody></table></div>`:'<div class="card empty">ما فيه مسير لهذا الشهر. اضغط "إنشاء المسير".</div>'}`;
   $('#pm').onchange=e=>{S.sub.pm=e.target.value;aPayroll(box,re)};
@@ -580,9 +597,13 @@ async function aSet(box,re){
 
   <h2>إعدادات عامة</h2><form id="gf" class="card stack">
    <label class="f">اسم الشركة<input name="company_name" value="${esc(st.company_name)}"></label>
-   <div class="grid2"><label class="f">خصم كل دقيقة تأخير (ريال)<input type="number" step="0.01" name="late_deduction_per_minute" value="${st.late_deduction_per_minute}"></label>
-   <label class="f">نسبة التأمينات على الموظف السعودي %<input type="number" step="0.01" name="gosi_employee_rate" value="${st.gosi_employee_rate}"></label>
-   <label class="f">أيام الشهر لحساب أجر اليوم<input type="number" name="working_days_per_month" value="${st.working_days_per_month}"></label></div>
+   <b style="margin-top:6px">قواعد الخصم</b>
+   <label class="f">الخصم محسوب على<select name="deduction_base" id="g_base"><option value="gross" ${st.deduction_base!=='basic'?'selected':''}>الراتب الإجمالي (الأساسي + البدلات)</option><option value="basic" ${st.deduction_base==='basic'?'selected':''}>الراتب الأساسي فقط</option></select></label>
+   <div class="grid2"><label class="f">أيام الشهر (أجر اليوم = الراتب ÷)<input type="number" name="working_days_per_month" id="g_days" value="${st.working_days_per_month}"></label>
+   <label class="f">التأخير اللي يُحسب غياب يوم (بالدقائق)<input type="number" name="late_absence_minutes" id="g_lam" value="${st.late_absence_minutes??120}" min="0"></label>
+   <label class="f">خصم يوم الغياب بدون عذر = كم يوم؟<input type="number" step="0.5" name="absence_multiplier" id="g_mul" value="${st.absence_multiplier??2}" min="0"></label>
+   <label class="f">نسبة التأمينات على الموظف السعودي %<input type="number" step="0.01" name="gosi_employee_rate" value="${st.gosi_employee_rate}"></label></div>
+   <div class="alert info small" id="g_ex"></div>
    <p class="small muted">تأكد من نسبة التأمينات الحالية من موقع التأمينات الاجتماعية، لأنها تتغير حسب تاريخ التسجيل.</p>
    <button class="btn">حفظ الإعدادات</button></form>`;
 
@@ -593,7 +614,12 @@ async function aSet(box,re){
     const {error}=await sb.from('shifts').insert(f);if(!fail(error))after('تمت إضافة الوردية')};
   $('#df').onsubmit=async e=>{e.preventDefault();const {error}=await sb.from('departments').insert(form(e.target));if(!fail(error))after('تمت إضافة القسم')};
   $('#hf').onsubmit=async e=>{e.preventDefault();const {error}=await sb.from('holidays').insert(form(e.target));if(!fail(error))after('تمت إضافة العطلة')};
-  $('#gf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);['late_deduction_per_minute','gosi_employee_rate','working_days_per_month'].forEach(k=>f[k]=Number(f[k]||0));
+  const ex=()=>{const d=+$('#g_days').value||30,lam=+$('#g_lam').value||0,mul=+$('#g_mul').value||0,day=6000/d,hr=day/8;
+    $('#g_ex').innerHTML=`<b>مثال:</b> موظف راتبه 6,000 ودوامه 8 ساعات ← أجر اليوم ${money(day)} والساعة ${money(hr)} ريال.<br>
+     • تأخر ساعة: يُخصم ${money(hr)} ريال<br>${lam?`• تأخر ${lam===60?'ساعة':lam===120?'ساعتين':lam%60===0?lam/60+' ساعات':lam+' دقيقة'} أو أكثر: يُحسب غياب ويُخصم ${money(day)} ريال<br>`:'• التأخير يُخصم بالدقيقة مهما طال<br>'}
+     • غاب يوم بدون عذر: يُخصم ${money(day*mul)} ريال (${mul} يوم)`};
+  ['g_days','g_lam','g_mul'].forEach(id=>$('#'+id).oninput=ex);ex();
+  $('#gf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);['gosi_employee_rate','working_days_per_month','late_absence_minutes','absence_multiplier'].forEach(k=>f[k]=Number(f[k]||0));
     const {error}=await sb.from('settings').update(f).eq('id',1);if(!fail(error))after('تم حفظ الإعدادات')};
   box.querySelectorAll('[data-lt]').forEach(i=>i.onchange=async()=>{const {error}=await sb.from('leave_types').update({default_days:Number(i.value||0)}).eq('id',i.dataset.lt);if(!fail(error))after('تم التحديث')});
   box.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{const [tb,col,val]=b.dataset.del.split('|');
@@ -641,10 +667,16 @@ function branchSheet(b,after){
     try{await loadLeaflet()}catch(e){el.querySelector('#bmap').innerHTML='<div class="alert bad">تعذر تحميل الخريطة، تأكد من الإنترنت وحاول مرة ثانية</div>';return}
     const mEl=el.querySelector('#bmap');mEl.innerHTML='';
     map=L.map(mEl,{zoomControl:true,attributionControl:true}).setView(pos,b?17:12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+    const sat=L.layerGroup([
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,attribution:'Esri, Maxar'}),
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19}),
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,opacity:.7})]);
+    const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+    sat.addTo(map);
+    L.control.layers({'أقمار صناعية':sat,'خريطة':street},null,{position:'topright',collapsed:false}).addTo(map);
     const icon=L.divIcon({className:'',html:'<div style="width:26px;height:26px;border-radius:50% 50% 50% 0;background:#d23c2f;transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>',iconSize:[26,26],iconAnchor:[13,26]});
     marker=L.marker(pos,{draggable:true,icon}).addTo(map);
-    circle=L.circle(pos,{radius:+rIn.value,color:'#0e5c63',fillColor:'#0e5c63',fillOpacity:.15,weight:2}).addTo(map);
+    circle=L.circle(pos,{radius:+rIn.value,color:'#ffd23f',fillColor:'#ffd23f',fillOpacity:.18,weight:3}).addTo(map);
     marker.on('drag',e=>{pos=[e.latlng.lat,e.latlng.lng];circle.setLatLng(e.latlng)});
     map.on('click',e=>setPos([e.latlng.lat,e.latlng.lng]));
     setTimeout(()=>map.invalidateSize(),250);
