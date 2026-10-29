@@ -679,16 +679,17 @@ function checkDate(date,key,title,sub,ref){
 }
 const dueText=n=>n<0?`منتهية منذ ${-n} يوم`:n===0?'تنتهي اليوم':`تنتهي بعد ${n} يوم`;
 function empAlerts(p){if(!p||p.is_active===false)return [];
-  return [checkDate(p.id_expiry,'id_expiry',p.national_id?.startsWith('2')?'الإقامة':'الهوية',p.full_name,{t:'emp',id:p.id}),
-   checkDate(p.work_permit_expiry,'work_permit','كرت العمل',p.full_name,{t:'emp',id:p.id}),
-   checkDate(p.medical_insurance_expiry,'medical','التأمين الطبي',p.full_name,{t:'emp',id:p.id}),
-   checkDate(p.contract_end,'contract_end','نهاية العقد',p.full_name,{t:'emp',id:p.id})].filter(Boolean)}
-function vehAlerts(v){const s=`${v.plate_no}${v.description?' · '+v.description:''}`,r={t:'veh',id:v.id};
-  return [checkDate(v.registration_expiry,'veh_registration','استمارة المركبة',s,r),checkDate(v.insurance_expiry,'veh_insurance','تأمين المركبة',s,r),
-   checkDate(v.authorization_expiry,'veh_authorization','تفويض المركبة',s,r),checkDate(v.inspection_expiry,'veh_inspection','الفحص الدوري',s,r)].filter(Boolean)}
-function docAlerts(d){const r={t:'doc',id:d.id},s=d.name+(d.number?' · '+d.number:'');
-  if(d.kind==='cr')return [checkDate(d.expiry_date,'cr_expiry','انتهاء السجل التجاري',s,r),checkDate(d.confirm_date,'cr_confirm','التأكيد السنوي للسجل',s,r)].filter(Boolean);
-  return [checkDate(d.expiry_date,DOC_KINDS[d.kind]?(d.kind==='cr'?'cr_expiry':d.kind):'other',DOC_KINDS[d.kind]||'وثيقة',s,r)].filter(Boolean)}
+  const r=c=>({t:'emp',id:p.id,col:c});
+  return [checkDate(p.id_expiry,'id_expiry',p.national_id?.startsWith('2')?'الإقامة':'الهوية',p.full_name,r('id_expiry')),
+   checkDate(p.work_permit_expiry,'work_permit','كرت العمل',p.full_name,r('work_permit_expiry')),
+   checkDate(p.medical_insurance_expiry,'medical','التأمين الطبي',p.full_name,r('medical_insurance_expiry')),
+   checkDate(p.contract_end,'contract_end','نهاية العقد',p.full_name,r('contract_end'))].filter(Boolean)}
+function vehAlerts(v){const s=`${v.plate_no}${v.description?' · '+v.description:''}`,r=c=>({t:'veh',id:v.id,col:c});
+  return [checkDate(v.registration_expiry,'veh_registration','استمارة المركبة',s,r('registration_expiry')),checkDate(v.insurance_expiry,'veh_insurance','تأمين المركبة',s,r('insurance_expiry')),
+   checkDate(v.authorization_expiry,'veh_authorization','تفويض المركبة',s,r('authorization_expiry')),checkDate(v.inspection_expiry,'veh_inspection','الفحص الدوري',s,r('inspection_expiry'))].filter(Boolean)}
+function docAlerts(d){const r=c=>({t:'doc',id:d.id,col:c}),s=d.name+(d.number?' · '+d.number:'');
+  if(d.kind==='cr')return [checkDate(d.expiry_date,'cr_expiry','انتهاء السجل التجاري',s,r('expiry_date')),checkDate(d.confirm_date,'cr_confirm','التأكيد السنوي للسجل',s,r('confirm_date'))].filter(Boolean);
+  return [checkDate(d.expiry_date,DOC_KINDS[d.kind]?d.kind:'other',DOC_KINDS[d.kind]||'وثيقة',s,r('expiry_date'))].filter(Boolean)}
 async function collectAlerts(){
   if(!S.profiles.length)await loadProfiles();
   const [{data:veh},{data:docs}]=await Promise.all([sb.from('vehicles').select('*'),sb.from('company_docs').select('*')]);
@@ -698,13 +699,36 @@ async function collectAlerts(){
 async function refreshAlertCount(){try{const a=await collectAlerts();const c=a.length;if(c!==S.alertCount){S.alertCount=c;drawNav()}}catch(e){}}
 function alertRow(a){const cls=a.lvl==='expired'?'p-bad':a.lvl==='urgent'?'p-bad':'p-warn';
   const stage=a.lvl==='expired'?'منتهي':alertDays(a.key).length>1?(a.stage>=2?'التنبيه الثاني':'التنبيه الأول'):'تنبيه';
-  return `<div class="item" data-go="${a.ref.t}:${a.ref.id}" style="cursor:pointer"><div class="main"><div class="t">${esc(a.title)}</div><div class="small muted">${esc(a.sub)} · ${fmtDate(a.date)}</div></div>
-   <div style="text-align:left"><span class="pill ${cls}">${dueText(a.n)}</span><div class="small muted">${stage}</div></div></div>`}
+  return `<div class="item" style="flex-wrap:wrap"><div class="main" data-go="${a.ref.t}:${a.ref.id}" style="cursor:pointer"><div class="t">${esc(a.title)}</div><div class="small muted">${esc(a.sub)} · ${fmtDate(a.date)}</div>
+   <div class="row" style="gap:6px;margin-top:4px"><span class="pill ${cls}">${dueText(a.n)}</span><span class="small muted">${stage}</span></div></div>
+   <button class="btn sm" data-renew="${a.ref.t}|${a.ref.id}|${a.ref.col}|${a.date}|${esc(a.title)}|${esc(a.sub)}">تم التجديد</button></div>`}
+function addMonths(d,m){const [y,mo,da]=d.split('-').map(Number);const t=new Date(Date.UTC(y,mo-1+m,1));const last=new Date(Date.UTC(t.getUTCFullYear(),t.getUTCMonth()+1,0)).getUTCDate();t.setUTCDate(Math.min(da,last));return t.toISOString().slice(0,10)}
+function renewSheet(t,id,col,date,title,sub,re){
+  const TB={emp:'profiles',veh:'vehicles',doc:'company_docs'}[t];
+  let months=12,from=daysLeft(date)<0?'today':'expiry';
+  sheet(`<h3>تجديد ${esc(title)}</h3><p class="small muted" style="margin:0 0 10px">${esc(sub)} · الانتهاء الحالي ${fmtDate(date)}</p>
+    <div class="small muted">مدة التجديد</div>
+    <div class="grid3" id="rm" style="margin:6px 0 12px">${[3,6,9,12,15,18,21,24,27,30,33,36].map(m=>`<button type="button" class="chip ${m===12?'on':''}" data-m="${m}" style="text-align:center">${m} شهر</button>`).join('')}</div>
+    <div class="small muted">يبدأ التجديد من</div>
+    <div class="chips" id="rf" style="margin:6px 0 12px"><button type="button" class="chip ${from==='expiry'?'on':''}" data-f="expiry">تاريخ الانتهاء الحالي</button><button type="button" class="chip ${from==='today'?'on':''}" data-f="today">اليوم</button></div>
+    <div class="alert info" id="rnew"></div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="rok" style="flex:1">حفظ التجديد</button><button class="btn ghost" id="rx">إلغاء</button></div>`,
+  (el,close)=>{
+    const nd=()=>addMonths(from==='today'?todayStr():date,months);
+    const upd=()=>{el.querySelector('#rnew').innerHTML=`تاريخ الانتهاء الجديد: <b>${fmtLong(nd())}</b>`};upd();
+    el.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{months=+b.dataset.m;el.querySelectorAll('[data-m]').forEach(x=>x.classList.toggle('on',x===b));upd()});
+    el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{from=b.dataset.f;el.querySelectorAll('[data-f]').forEach(x=>x.classList.toggle('on',x===b));upd()});
+    el.querySelector('#rx').onclick=close;
+    el.querySelector('#rok').onclick=async()=>{const {error}=await sb.from(TB).update({[col]:nd()}).eq('id',id);if(fail(error))return;
+      close();toast(`تم التجديد حتى ${fmtDate(nd())}`);if(t==='emp')await loadProfiles();re()};
+  });
+}
 async function aAlerts(box,re){
   const all=await collectAlerts();S.alertCount=all.length;drawNav();
   const grp=[['expired','منتهية'],['urgent','عاجل'],['soon','قريباً']];
   box.innerHTML=`<h2>التنبيهات</h2>${all.length?grp.map(([k,l])=>{const it=all.filter(a=>a.lvl===k);return it.length?`<h3 style="margin-top:14px">${l} (${it.length})</h3><div class="card list">${it.map(alertRow).join('')}</div>`:''}).join(''):'<div class="card empty">ما فيه أي وثيقة قريبة الانتهاء 👍</div>'}
    <p class="small muted">تقدر تعدّل مواعيد التنبيهات من الإعدادات.</p>`;
+  box.querySelectorAll('[data-renew]').forEach(b=>b.onclick=()=>{const [t,id,col,date,title,sub]=b.dataset.renew.split('|');renewSheet(t,id,col,date,title,sub,()=>aAlerts(box,re))});
   box.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{const [t,id]=el.dataset.go.split(':');
     if(t==='emp')editEmp(S.profiles.find(p=>p.id===id),re);if(t==='veh')vehSheet(S.vehicles.find(v=>v.id===id),re);if(t==='doc')docSheet(S.docs.find(d=>d.id===id),re)});
 }
