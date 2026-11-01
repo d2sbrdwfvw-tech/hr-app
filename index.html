@@ -192,7 +192,7 @@ const nameOf=id=>S.profiles.find(p=>p.id===id)?.full_name||'—';
 function toast(msg,kind){const t=document.createElement('div');t.className='toast'+(kind==='bad'?' bad':'');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),kind==='bad'?4500:2600)}
 function fail(error){if(error){toast(error.message||'حدث خطأ','bad');return true}return false}
 function sheet(html,onMount){const bg=document.createElement('div');bg.className='sheet-bg';bg.innerHTML=`<div class="sheet">${html}</div>`;
-  bg.addEventListener('click',e=>{if(e.target===bg)bg.remove()});document.body.appendChild(bg);onMount&&onMount(bg.querySelector('.sheet'),()=>bg.remove());return bg}
+  bg.addEventListener('click',e=>{if(e.target===bg&&!bg.dataset.lock)bg.remove()});document.body.appendChild(bg);onMount&&onMount(bg.querySelector('.sheet'),()=>bg.remove());return bg}
 function form(el){const o={};el.querySelectorAll('[name]').forEach(i=>{o[i.name]=i.type==='checkbox'?i.checked:(i.value===''?null:i.value)});return o}
 function downloadCSV(name,rows){const csv='﻿'+rows.map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
@@ -239,9 +239,10 @@ function vAuth(mode='in'){
       <p id="amsg" class="small" hidden></p>
     </form>
     <p class="small" style="text-align:center;margin-top:14px">
-      ${mode==='in'?'ما عندك حساب؟':'عندك حساب؟'} <a href="#" id="sw" style="color:var(--brand);font-weight:600">${mode==='in'?'سجّل كموظف جديد':'سجّل دخول'}</a></p>
+      ${mode==='in'?'<a href="#" id="fg" style="color:var(--brand);font-weight:600;display:block;margin-bottom:10px">نسيت كلمة المرور؟</a>':''}${mode==='in'?'ما عندك حساب؟':'عندك حساب؟'} <a href="#" id="sw" style="color:var(--brand);font-weight:600">${mode==='in'?'سجّل كموظف جديد':'سجّل دخول'}</a></p>
   </div>`;
   $('#sw').onclick=e=>{e.preventDefault();vAuth(mode==='in'?'up':'in')};
+  $('#fg')&&($('#fg').onclick=e=>{e.preventDefault();forgotSheet()});
   $('#af').onsubmit=async e=>{e.preventDefault();const f=form(e.target),b=$('#ab'),m=$('#amsg');b.disabled=true;m.hidden=true;
     const bad=t=>{b.disabled=false;m.hidden=false;m.className='alert bad small';m.textContent=t};
     const nid=normDigits(f.nid);
@@ -283,12 +284,13 @@ function drawNav(){nav.hidden=false;nav.innerHTML=tabs().map(([k,l,ic])=>`<butto
   nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{S.tab=b.dataset.t;render();window.scrollTo(0,0)})}
 function header(){return `<header class="top"><div><h1>${esc(S.settings?.company_name||'الموارد البشرية')}</h1>
   <div class="sub">${esc(S.me.full_name)} · ${ROLES[S.me.role]}</div></div>
-  <button class="icon-btn" id="lo">خروج</button></header>`}
+  <div class="row" style="gap:6px;flex-wrap:nowrap"><button class="icon-btn" id="pw">كلمة المرور</button><button class="icon-btn" id="lo">خروج</button></div></header>`}
 let clockTimer;
 async function render(){
   clearInterval(clockTimer);drawNav();
   app.innerHTML=header()+'<main id="v"><div class="empty"><span class="spin"></span></div></main>';
   $('#lo').onclick=async()=>{await sb.auth.signOut()};
+  $('#pw').onclick=()=>changePwSheet(false);
   const v=$('#v');
   try{({home:vHome,mine:vMine,req:vReq,pay:vPay,admin:vAdmin,appr:vAppr}[S.tab]||vHome)(v)}catch(e){v.innerHTML=`<div class="alert bad">${esc(e.message)}</div>`}
 }
@@ -347,11 +349,12 @@ async function hrQuick(box){
     sb.from('attendance').select('status').eq('work_date',t),
     sb.from('leave_requests').select('id',{count:'exact',head:true}).eq('status','pending'),
     sb.from('employee_requests').select('id',{count:'exact',head:true}).eq('status','pending')]);
+  const {count:prs}=await sb.from('password_resets').select('id',{count:'exact',head:true}).eq('status','pending');
   const present=(att||[]).length,late=(att||[]).filter(a=>a.status==='late').length;
   box.innerHTML=`<h2>اليوم في الشركة</h2><div class="grid3">
    <div class="stat"><b>${present}<small class="muted" style="font-size:14px"> / ${emp||0}</small></b><span>حاضرين</span></div>
    <div class="stat"><b style="color:var(--warn)">${late}</b><span>متأخرين</span></div>
-   <div class="stat"><b style="color:var(--brand)">${(pl||0)+(pr||0)}</b><span>طلبات معلقة</span></div></div>`;
+   <div class="stat"><b style="color:var(--brand)">${(pl||0)+(pr||0)+(prs||0)}</b><span>طلبات معلقة</span></div></div>`;
   await refreshAlertCount();
   if(S.alertCount){const a=document.createElement('div');a.className='alert bad';a.style.cssText='margin-top:12px;cursor:pointer';
     a.innerHTML=`<b>${S.alertCount} تنبيه</b> · وثائق ومركبات تنتهي قريباً أو منتهية. اضغط للعرض ←`;
@@ -446,13 +449,20 @@ async function approvalsHTML(box,reload){
     sb.from('leave_requests').select('*,leave_types(name),emp:profiles!leave_requests_employee_id_fkey(full_name)').eq('status','pending').order('created_at'),
     isHR()?sb.from('employee_requests').select('*,emp:profiles!employee_requests_employee_id_fkey(full_name)').eq('status','pending').order('created_at'):Promise.resolve({data:[]})]);
   const lvs=(lv||[]).filter(r=>r.employee_id!==S.me.id||isHR());
-  box.innerHTML=`<h2>طلبات الإجازة</h2><div class="card list">${lvs.length?lvs.map(r=>`<div class="item" style="flex-wrap:wrap"><div class="main">
+  let resets=[];
+  if(isHR()){const {data}=await sb.from('password_resets').select('*,emp:profiles!password_resets_employee_id_fkey(full_name,phone,national_id)').eq('status','pending').order('created_at');resets=data||[]}
+  box.innerHTML=`${resets.length?`<h2>طلبات استعادة كلمة المرور</h2><div class="card list">${resets.map(r=>`<div class="item"><div class="main"><div class="t">${esc(r.emp?.full_name)}</div>
+      <div class="small muted num" dir="ltr" style="text-align:right">${esc(r.emp?.phone||'')} · ${fmtDate(todayStr(new Date(r.created_at)))} ${fmtTime(r.created_at)}</div></div>
+      <div class="row"><button class="btn sm" data-rs="${r.employee_id}">إعادة تعيين</button><button class="btn ghost sm" data-rsx="${r.id}">تجاهل</button></div></div>`).join('')}</div>`:''}
+    <h2>طلبات الإجازة</h2><div class="card list">${lvs.length?lvs.map(r=>`<div class="item" style="flex-wrap:wrap"><div class="main">
       <div class="t">${esc(r.emp?.full_name)}</div><div class="small muted">${esc(r.leave_types?.name)} · ${r.days} يوم · ${fmtDate(r.start_date)} ← ${fmtDate(r.end_date)}</div>
       ${r.reason?`<div class="small">${esc(r.reason)}</div>`:''}</div>
       <div class="row"><button class="btn sm" data-a="leave_requests:${r.id}:approved">قبول</button><button class="btn ghost sm" data-a="leave_requests:${r.id}:rejected">رفض</button></div></div>`).join(''):'<div class="empty">ما فيه طلبات إجازة معلقة</div>'}</div>
     ${isHR()?`<h2>الطلبات الأخرى</h2><div class="card list">${(rq||[]).length?rq.map(r=>`<div class="item" style="flex-wrap:wrap"><div class="main">
       <div class="t">${esc(r.emp?.full_name)}</div><div class="small muted">${KINDS[r.kind]}${r.amount?` · ${money(r.amount)} ريال`:''}</div>${r.details?`<div class="small">${esc(r.details)}</div>`:''}</div>
       <div class="row"><button class="btn sm" data-a="employee_requests:${r.id}:approved">قبول</button><button class="btn ghost sm" data-a="employee_requests:${r.id}:rejected">رفض</button></div></div>`).join(''):'<div class="empty">ما فيه طلبات معلقة</div>'}</div>`:''}`;
+  box.querySelectorAll('[data-rs]').forEach(b=>b.onclick=()=>resetPw(b.dataset.rs,reload));
+  box.querySelectorAll('[data-rsx]').forEach(b=>b.onclick=async()=>{const {error}=await sb.from('password_resets').update({status:'ignored',done_by:S.me.id,done_at:new Date().toISOString()}).eq('id',b.dataset.rsx);if(!fail(error)){toast('تم تجاهل الطلب');reload()}});
   box.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{const [tb,id,st]=b.dataset.a.split(':');
     sheet(`<h3>${st==='approved'?'قبول الطلب':'رفض الطلب'}</h3><label class="f">ملاحظة للموظف (اختياري)<textarea id="dn"></textarea></label>
       <div class="row" style="margin-top:12px"><button class="btn ${st==='rejected'?'bad':''}" id="dok">${st==='approved'?'تأكيد القبول':'تأكيد الرفض'}</button><button class="btn ghost" id="dx">رجوع</button></div>`,
@@ -565,8 +575,9 @@ function editEmp(p,re){
     <label class="f">بدل النقل<input type="number" step="0.01" name="transport_allowance" value="${p.transport_allowance}" inputmode="decimal"></label><label class="f">بدلات أخرى<input type="number" step="0.01" name="other_allowance" value="${p.other_allowance}" inputmode="decimal"></label></div>
     <label class="row small"><input type="checkbox" name="is_saudi" ${p.is_saudi?'checked':''}> سعودي (يُخصم عليه التأمينات الاجتماعية)</label>
     <label class="row small"><input type="checkbox" name="is_active" ${p.is_active?'checked':''}> الحساب نشط</label>
-    <div class="row"><button class="btn" style="flex:1">حفظ</button><button type="button" class="btn ghost" id="ex">إغلاق</button></div></form>`,
-  (el,close)=>{el.querySelector('#ex').onclick=close;el.querySelector('#ef').onsubmit=async e=>{e.preventDefault();const f=form(e.target);
+    <div class="row"><button class="btn" style="flex:1">حفظ</button><button type="button" class="btn ghost" id="ex">إغلاق</button></div>
+    ${p.id!==S.me.id?'<button type="button" class="btn ghost block" id="erst">إعادة تعيين كلمة المرور</button>':''}</form>`,
+  (el,close)=>{el.querySelector('#ex').onclick=close;el.querySelector('#erst')&&(el.querySelector('#erst').onclick=()=>{close();resetPw(p.id,re)});el.querySelector('#ef').onsubmit=async e=>{e.preventDefault();const f=form(e.target);
     ['basic_salary','housing_allowance','transport_allowance','other_allowance'].forEach(k=>f[k]=Number(f[k]||0));
     const {error}=await sb.from('profiles').update(f).eq('id',p.id);if(fail(error))return;close();toast('تم حفظ بيانات الموظف');if(p.id===S.me.id)await loadMe(p.id);re()}});
 }
@@ -660,6 +671,56 @@ async function aSet(box,re){
   box.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{const [tb,col,val]=b.dataset.del.split('|');
     if(!confirm('متأكد من الحذف؟'))return;const {error}=await sb.from(tb).delete().eq(col,val);
     if(error&&/foreign key/i.test(error.message))return toast('ما يمكن الحذف لأنه مرتبط بموظفين أو سجلات','bad');if(!fail(error))after('تم الحذف')});
+}
+
+/* ---------- كلمة المرور ---------- */
+function forgotSheet(){
+  sheet(`<form id="fgf" class="stack"><h3>نسيت كلمة المرور</h3>
+    <p class="small muted" style="margin:0">اكتب رقم هويتك وجوالك المسجل، ويوصل طلبك للموارد البشرية ويرسلون لك كلمة مرور مؤقتة على الواتساب.</p>
+    <label class="f">رقم الهوية أو الإقامة<input name="nid" required inputmode="numeric" dir="ltr"></label>
+    <label class="f">رقم الجوال المسجل<input name="phone" required type="tel" inputmode="tel" placeholder="05XXXXXXXX" dir="ltr"></label>
+    <div id="fgm" hidden></div>
+    <div class="row"><button class="btn" style="flex:1" id="fgb">إرسال الطلب</button><button type="button" class="btn ghost" id="fgx">إغلاق</button></div></form>`,
+  (el,close)=>{el.querySelector('#fgx').onclick=close;
+    el.querySelector('#fgf').onsubmit=async e=>{e.preventDefault();const f=form(e.target),m=el.querySelector('#fgm'),b=el.querySelector('#fgb');
+      const nid=normDigits(f.nid),ph=normPhone(f.phone);
+      if(!/^[12]\d{9}$/.test(nid)||!ph){m.hidden=false;m.className='alert bad small';m.textContent='تأكد من رقم الهوية (10 أرقام) ورقم الجوال';return}
+      b.disabled=true;const {error}=await sb.rpc('request_password_reset',{p_nid:nid,p_phone:'0'+ph.slice(3)});b.disabled=false;
+      m.hidden=false;if(error){m.className='alert bad small';m.textContent='تعذر إرسال الطلب، حاول مرة ثانية';return}
+      m.className='alert info small';m.textContent='تم إرسال طلبك. إذا كانت البيانات صحيحة، بتوصلك كلمة مرور مؤقتة من الموارد البشرية قريباً.';b.hidden=true}});
+}
+function changePwSheet(forced){
+  sheet(`<form id="cpf" class="stack"><h3>${forced?'غيّر كلمة المرور المؤقتة':'تغيير كلمة المرور'}</h3>
+    ${forced?'<p class="small muted" style="margin:0">دخلت بكلمة مرور مؤقتة، اختر كلمة مرور جديدة خاصة فيك.</p>':''}
+    <label class="f">كلمة المرور الجديدة<input type="password" name="p1" required minlength="6" autocomplete="new-password" dir="ltr"></label>
+    <label class="f">أعد كتابتها<input type="password" name="p2" required minlength="6" autocomplete="new-password" dir="ltr"></label>
+    <div id="cpm" hidden></div>
+    <div class="row"><button class="btn" style="flex:1">حفظ</button>${forced?'':'<button type="button" class="btn ghost" id="cpx">إلغاء</button>'}</div></form>`,
+  (el,close)=>{el.querySelector('#cpx')&&(el.querySelector('#cpx').onclick=close);
+    if(forced)el.parentElement.parentElement.dataset.lock=1;
+    el.querySelector('#cpf').onsubmit=async e=>{e.preventDefault();const f=form(e.target),m=el.querySelector('#cpm');
+      const bad=t=>{m.hidden=false;m.className='alert bad small';m.textContent=t};
+      if(f.p1!==f.p2)return bad('كلمتين المرور مو متطابقة');if(f.p1.length<6)return bad('كلمة المرور لازم تكون 6 أحرف على الأقل');
+      const {error}=await sb.auth.updateUser({password:f.p1});
+      if(error)return bad(/different|same/i.test(error.message)?'اختر كلمة مرور مختلفة عن السابقة':error.message);
+      await sb.rpc('password_changed');S.me.must_change_password=false;close();toast('تم تغيير كلمة المرور')}});
+}
+async function resetPw(empId,reload){
+  const p=S.profiles.find(x=>x.id===empId)||{};
+  sheet(`<h3>إعادة تعيين كلمة المرور</h3><p>بيتم إنشاء كلمة مرور مؤقتة لـ <b>${esc(p.full_name||'')}</b>، وكلمته القديمة ما تشتغل بعدها.</p>
+    <div class="row"><button class="btn" id="rsok" style="flex:1">إنشاء كلمة مؤقتة</button><button class="btn ghost" id="rsx">إلغاء</button></div>`,
+  (el,close)=>{el.querySelector('#rsx').onclick=close;
+    el.querySelector('#rsok').onclick=async e=>{e.target.disabled=true;const {data:pass,error}=await sb.rpc('admin_reset_password',{p_emp:empId});
+      if(fail(error)){e.target.disabled=false;return}
+      const ph=normPhone(p.phone),url=location.origin+location.pathname;
+      const msg=`السلام عليكم ${p.full_name||''}،\nكلمة المرور المؤقتة لتطبيق الحضور: ${pass}\nادخل برقم هويتك وهذي الكلمة، وبعدها بيطلب منك التطبيق تختار كلمة جديدة.\n${url}`;
+      el.innerHTML=`<h3>كلمة المرور المؤقتة</h3><p class="small muted" style="margin:0">لـ ${esc(p.full_name||'')}</p>
+        <div class="num" style="font:700 30px var(--display);text-align:center;letter-spacing:3px;padding:16px;background:var(--surface-2);border-radius:12px;margin:12px 0;user-select:all" dir="ltr">${esc(pass)}</div>
+        <div class="stack">${ph?`<a class="btn block" style="text-align:center;text-decoration:none;background:#1f9d55" href="https://wa.me/${ph}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">إرسال على الواتساب</a>`:'<div class="alert warn small">ما فيه رقم جوال مسجل للموظف، انسخ الكلمة وأرسلها له.</div>'}
+        <button class="btn ghost block" id="cpy">نسخ الرسالة</button><button class="btn ghost block" id="dn">تم</button></div>`;
+      el.querySelector('#cpy').onclick=async()=>{try{await navigator.clipboard.writeText(msg);toast('تم النسخ')}catch(_){toast('انسخ الكلمة يدوياً','bad')}};
+      el.querySelector('#dn').onclick=()=>{close();reload&&reload()}};
+  });
 }
 
 /* ---------- التنبيهات والوثائق ---------- */
@@ -865,6 +926,7 @@ async function boot(session){
     if(!S.me.is_active){app.innerHTML='<div class="alert bad" style="margin-top:20vh">حسابك موقوف. تواصل مع الموارد البشرية.</div><button class="btn ghost" style="margin-top:12px" onclick="sb.auth.signOut()">خروج</button>';nav.hidden=true;return}
     if(isHR()){await loadProfiles();refreshAlertCount()}
     render();
+    if(S.me.must_change_password)changePwSheet(true);
   }catch(e){booted=null;app.innerHTML=`<div class="alert bad" style="margin-top:20vh">تعذر الاتصال: ${esc(e.message)}</div>`}
 }
 sb.auth.onAuthStateChange((_e,session)=>{setTimeout(()=>boot(session),0)});
