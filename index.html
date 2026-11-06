@@ -601,6 +601,7 @@ function editEmp(p,re){
     <label class="f">بدل النقل<input type="number" step="0.01" name="transport_allowance" value="${p.transport_allowance}" inputmode="decimal"></label><label class="f">بدلات أخرى<input type="number" step="0.01" name="other_allowance" value="${p.other_allowance}" inputmode="decimal"></label></div>
     <label class="row small"><input type="checkbox" name="is_saudi" ${p.is_saudi?'checked':''}> سعودي (يُخصم عليه التأمينات الاجتماعية)</label>
     <label class="row small"><input type="checkbox" name="is_active" ${p.is_active?'checked':''}> الحساب نشط</label>
+    <label class="row small"><input type="checkbox" name="presence_required" ${p.presence_required?'checked':''}> يشمله تأكيد التواجد (توصله طلبات تأكيد خلال الدوام)</label>
     <div class="row"><button class="btn" style="flex:1">حفظ</button><button type="button" class="btn ghost" id="ex">إغلاق</button></div>
     ${p.id!==S.me.id?'<button type="button" class="btn ghost block" id="erst">إعادة تعيين كلمة المرور</button>':''}</form>`,
   (el,close)=>{el.querySelector('#ex').onclick=close;el.querySelector('#erst')&&(el.querySelector('#erst').onclick=()=>{close();resetPw(p.id,re)});el.querySelector('#ef').onsubmit=async e=>{e.preventDefault();const f=form(e.target);
@@ -663,6 +664,7 @@ async function aSet(box,re){
    <label class="row" style="justify-content:space-between"><b>تشغيل تأكيد التواجد</b><input type="checkbox" name="presence_enabled" id="pen" ${st.presence_enabled?'checked':''} style="width:22px;height:22px"></label>
    <div class="grid2" id="pset"><label class="f">كم مرة باليوم لكل موظف<select name="presence_per_day">${[1,2,3,4,5].map(n=>`<option value="${n}" ${+st.presence_per_day===n?'selected':''}>${n===1?'مرة وحدة':n===2?'مرتين':n+' مرات'}</option>`).join('')}</select></label>
    <label class="f">مهلة الرد<select name="presence_window_min">${[5,10,15,20,30].map(n=>`<option value="${n}" ${+st.presence_window_min===n?'selected':''}>${n} دقائق</option>`).join('')}</select></label></div>
+   <p class="small muted" style="margin:0">يشمل بس الموظفين اللي اخترتهم: <b>${S.profiles.filter(p=>p.presence_required&&p.is_active).length} موظف</b>. تختارهم من ملف كل موظف (يشمله تأكيد التواجد).</p>
    <p class="small muted" style="margin:0">الأوقات تنحدد عشوائياً لكل موظف أول ما يبصم حضور، بين نص ساعة بعد حضوره ونص ساعة قبل نهاية ورديته. التغيير يطبق من البصمة الجاية.</p>
    <button class="btn">حفظ</button></form>
   <h2>مواعيد التنبيهات</h2><div class="card list">
@@ -752,6 +754,7 @@ async function presenceBox(anchor){
         toast(r?.status==='outside'?'تم التسجيل، لكنك خارج نطاق موقع العمل':'تم تأكيد تواجدك ✓',r?.status==='outside'?'bad':'');clearInterval(t);render()};
     }
   }
+  if(!S.me.presence_required)return;
   if(S.settings?.presence_enabled&&pushOK()&&Notification.permission!=='granted'){
     const n=document.createElement('div');n.className='alert info small';n.style.cursor='pointer';
     n.innerHTML='<b>فعّل الإشعارات</b> عشان يوصلك طلب تأكيد التواجد على جوالك. اضغط هنا ←';n.onclick=()=>enablePush();wrap.appendChild(n);
