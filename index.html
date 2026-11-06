@@ -183,6 +183,10 @@ const ROLES={employee:'موظف',manager:'مدير',hr:'موارد بشرية',a
 const ATT={present:['حاضر','p-ok'],late:['متأخر','p-warn'],absent:['غائب','p-bad'],leave:['إجازة','p-info'],holiday:['عطلة','p-mute']};
 const RQ={pending:['قيد المراجعة','p-warn'],approved:['مقبول','p-ok'],rejected:['مرفوض','p-bad'],cancelled:['ملغي','p-mute']};
 const KINDS={salary_certificate:'تعريف بالراتب',advance:'سلفة',experience_letter:'شهادة خبرة',other:'طلب آخر'};
+const NEW_KINDS=['salary_certificate','experience_letter','other'];
+const empBr=p=>[...new Set([...(p?.branch_ids||[]),p?.branch_id].filter(Boolean))];
+const empSh=p=>[...new Set([...(p?.shift_ids||[]),p?.shift_id].filter(Boolean))];
+const isResident=p=>String(p?.national_id||'').startsWith('2');
 const PAY={draft:['مسودة','p-mute'],approved:['معتمد','p-info'],paid:['تم الصرف','p-ok']};
 const pill=(map,k)=>{const v=map[k]||[k,'p-mute'];return `<span class="pill ${v[1]}">${esc(v[0])}</span>`};
 const isHR=()=>['hr','admin'].includes(S.me?.role);
@@ -302,7 +306,8 @@ async function vHome(v){
     sb.from('attendance').select('*').eq('employee_id',S.me.id).eq('work_date',t).maybeSingle(),
     sb.from('attendance').select('*').eq('employee_id',S.me.id).not('check_in_at','is',null).is('check_out_at',null).order('check_in_at',{ascending:false}).limit(1)]);
   const openRec=(open||[])[0];
-  const br=S.branches.find(b=>b.id===S.me.branch_id),sh=S.shifts.find(s=>s.id===S.me.shift_id);
+  const brs=S.branches.filter(b=>empBr(S.me).includes(b.id)),shs=S.shifts.filter(s=>empSh(S.me).includes(s.id));
+  const br=brs[0],sh=shs[0];
   let state='in';if(openRec)state='out';else if(rec)state='done';
   const r=openRec||rec;
   const label={in:'تسجيل الحضور',out:'تسجيل الانصراف',done:'تم اليوم'}[state];
@@ -312,7 +317,7 @@ async function vHome(v){
     <div class="clock" id="clk">--:--</div>
     <div class="date">${fmtLong(t)}</div>
     <button class="punch-btn ${state==='out'?'out':state==='done'?'done':''}" id="pb" ${state==='done'||!br?'disabled':''}>${I.finger}<span>${label}</span></button>
-    <div class="small muted" id="pmsg">${br?`${I.pin.replace('<svg','<svg style="width:14px;height:14px;vertical-align:-2px"')} ${esc(br.name)}${sh?` · الدوام ${sh.start_time.slice(0,5)} - ${sh.end_time.slice(0,5)}`:''}`:''}</div>
+    <div class="small muted" id="pmsg">${br?`${I.pin.replace('<svg','<svg style="width:14px;height:14px;vertical-align:-2px"')} ${brs.length>1?brs.map(b=>esc(b.name)).join('، '):esc(br.name)}${shs.length?` · الدوام ${shs.map(s=>s.start_time.slice(0,5)+' - '+s.end_time.slice(0,5)).join(' أو ')}`:''}`:''}</div>
     <div class="times">
       <div><b>${fmtTime(r?.check_in_at)}</b><span>الحضور</span></div>
       <div><b>${fmtTime(r?.check_out_at)}</b><span>الانصراف</span></div>
@@ -391,30 +396,38 @@ async function vReq(v){
       return `<div class="stat"><b>${ent?ent-used:used}</b><span>${esc(lt.name)} · ${ent?`متبقي من ${ent}`:'يوم مستخدم'}</span></div>`}).join('')}</div>
       <h2>طلب إجازة</h2><form id="lf" class="card stack">
        <label class="f">نوع الإجازة<select name="leave_type_id" required>${opts(S.leaveTypes)}</select></label>
-       <div class="grid2"><label class="f">من<input type="date" name="start_date" required></label><label class="f">إلى<input type="date" name="end_date" required></label></div>
+       ${isResident(S.me)?`<div class="small muted">مدة الإجازة</div><div class="grid3" id="ldur">${[[15,'15 يوم'],[30,'شهر'],[45,'شهر ونص'],[60,'شهرين'],[75,'شهرين ونص'],[90,'3 أشهر'],[0,'مدة أخرى']].map(([d,l])=>`<button type="button" class="chip ${d===0?'':''}" data-ld="${d}" style="text-align:center">${l}</button>`).join('')}</div>`:''}
+       <div class="grid2"><label class="f">من<input type="date" name="start_date" id="lsd" required></label><label class="f" id="led-w">إلى<input type="date" name="end_date" id="led" required></label></div>
+       <div class="small muted" id="lsum"></div>
        <label class="f">السبب (اختياري)<textarea name="reason"></textarea></label>
        <button class="btn block">إرسال الطلب</button></form>
       <h2>طلباتي السابقة</h2><div class="card list">${(reqs||[]).length?reqs.map(r=>`<div class="item"><div class="main">
         <div class="t">${esc(r.leave_types?.name)} · ${r.days} ${r.days>2&&r.days<11?'أيام':'يوم'}</div>
         <div class="small muted">${fmtDate(r.start_date)} ← ${fmtDate(r.end_date)}</div>${r.decision_note?`<div class="small muted">ملاحظة: ${esc(r.decision_note)}</div>`:''}</div>
         <div class="stack" style="align-items:flex-end;gap:6px">${pill(RQ,r.status)}${r.status==='pending'?`<button class="btn ghost sm" data-c="${r.id}">إلغاء</button>`:''}</div></div>`).join(''):'<div class="empty">ما قدمت أي طلب إجازة</div>'}</div>`;
+    {let dur=null;const sd=$('#lsd'),ed=$('#led'),sum=$('#lsum');
+      const upd=()=>{if(dur&&sd.value)ed.value=addDays(sd.value,dur-1);
+        sum.textContent=sd.value&&ed.value&&ed.value>=sd.value?`المدة: ${daysLeft2(sd.value,ed.value)} يوم، ترجع للدوام ${fmtDate(addDays(ed.value,1))}`:''};
+      box.querySelectorAll('[data-ld]').forEach(b=>b.onclick=()=>{dur=+b.dataset.ld||null;box.querySelectorAll('[data-ld]').forEach(x=>x.classList.toggle('on',x===b));
+        ed.readOnly=!!dur;if(!dur)ed.focus();upd()});
+      sd.onchange=upd;ed.onchange=upd;}
     $('#lf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);if(f.end_date<f.start_date)return toast('تاريخ النهاية لازم يكون بعد البداية','bad');
       const {error}=await sb.from('leave_requests').insert({...f,employee_id:S.me.id});if(fail(error))return;toast('تم إرسال طلب الإجازة');vReq(v)};
     box.querySelectorAll('[data-c]').forEach(b=>b.onclick=async()=>{const {error}=await sb.from('leave_requests').update({status:'cancelled'}).eq('id',b.dataset.c);if(!fail(error)){toast('تم الإلغاء');vReq(v)}});
   }else{
     const {data:reqs}=await sb.from('employee_requests').select('*').eq('employee_id',S.me.id).order('created_at',{ascending:false});
     box.innerHTML=`<h2>طلب جديد</h2><form id="of" class="card stack">
-      <label class="f">نوع الطلب<select name="kind" id="ok">${Object.entries(KINDS).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select></label>
-      <label class="f" id="amt" hidden>المبلغ المطلوب (ريال)<input type="number" name="amount" min="0" step="0.01" inputmode="decimal"></label>
+      <label class="f">نوع الطلب<select name="kind" id="ok">${NEW_KINDS.map(k=>`<option value="${k}">${KINDS[k]}</option>`).join('')}</select></label>
       <label class="f">التفاصيل<textarea name="details" placeholder="مثلاً: تعريف موجه لبنك الراجحي"></textarea></label>
       <button class="btn block">إرسال الطلب</button></form>
       <h2>طلباتي السابقة</h2><div class="card list">${(reqs||[]).length?reqs.map(r=>`<div class="item"><div class="main">
         <div class="t">${KINDS[r.kind]}${r.amount?` · <span class="num">${money(r.amount)}</span> ريال`:''}</div>
-        <div class="small muted">${esc(r.details||'')}</div>${r.decision_note?`<div class="small muted">ملاحظة: ${esc(r.decision_note)}</div>`:''}</div>
+        <div class="small muted">${esc(r.details||'')}</div>${r.decision_note?`<div class="small muted">ملاحظة: ${esc(r.decision_note)}</div>`:''}
+        ${r.attachment_path?`<button class="btn sm" style="margin-top:6px" data-dl="${esc(r.attachment_path)}">تحميل ${esc(r.attachment_name||'الملف')}</button>`:''}</div>
         <div class="stack" style="align-items:flex-end;gap:6px">${pill(RQ,r.status)}${r.status==='pending'?`<button class="btn ghost sm" data-c="${r.id}">إلغاء</button>`:''}</div></div>`).join(''):'<div class="empty">ما قدمت أي طلب</div>'}</div>`;
-    $('#ok').onchange=e=>{$('#amt').hidden=e.target.value!=='advance'};
-    $('#of').onsubmit=async e=>{e.preventDefault();const f=form(e.target);if(f.kind!=='advance')f.amount=null;
+    $('#of').onsubmit=async e=>{e.preventDefault();const f=form(e.target);
       const {error}=await sb.from('employee_requests').insert({...f,employee_id:S.me.id});if(fail(error))return;toast('تم إرسال الطلب');vReq(v)};
+    box.querySelectorAll('[data-dl]').forEach(b=>b.onclick=()=>openDoc(b.dataset.dl,b));
     box.querySelectorAll('[data-c]').forEach(b=>b.onclick=async()=>{const {error}=await sb.from('employee_requests').update({status:'cancelled'}).eq('id',b.dataset.c);if(!fail(error)){toast('تم الإلغاء');vReq(v)}});
   }
 }
@@ -464,10 +477,21 @@ async function approvalsHTML(box,reload){
   box.querySelectorAll('[data-rs]').forEach(b=>b.onclick=()=>resetPw(b.dataset.rs,reload));
   box.querySelectorAll('[data-rsx]').forEach(b=>b.onclick=async()=>{const {error}=await sb.from('password_resets').update({status:'ignored',done_by:S.me.id,done_at:new Date().toISOString()}).eq('id',b.dataset.rsx);if(!fail(error)){toast('تم تجاهل الطلب');reload()}});
   box.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{const [tb,id,st]=b.dataset.a.split(':');
+    const att=tb==='employee_requests'&&st==='approved';
     sheet(`<h3>${st==='approved'?'قبول الطلب':'رفض الطلب'}</h3><label class="f">ملاحظة للموظف (اختياري)<textarea id="dn"></textarea></label>
+      ${att?`<label class="f" style="margin-top:10px">إرفاق الملف للموظف (PDF أو صورة)<input type="file" id="dfile" accept="application/pdf,image/*"></label><p class="small muted" style="margin:4px 0 0">مثل التعريف بالراتب أو شهادة الخبرة، والموظف يحمّله من طلباته</p>`:''}
       <div class="row" style="margin-top:12px"><button class="btn ${st==='rejected'?'bad':''}" id="dok">${st==='approved'?'تأكيد القبول':'تأكيد الرفض'}</button><button class="btn ghost" id="dx">رجوع</button></div>`,
-    (el,close)=>{el.querySelector('#dx').onclick=close;el.querySelector('#dok').onclick=async()=>{
-      const {error}=await sb.from(tb).update({status:st,decided_by:S.me.id,decided_at:new Date().toISOString(),decision_note:el.querySelector('#dn').value||null}).eq('id',id);
+    (el,close)=>{el.querySelector('#dx').onclick=close;el.querySelector('#dok').onclick=async e=>{
+      const upd={status:st,decided_by:S.me.id,decided_at:new Date().toISOString(),decision_note:el.querySelector('#dn').value||null};
+      const file=att&&el.querySelector('#dfile').files[0];
+      if(file){if(file.size>10*1024*1024)return toast('حجم الملف أكبر من 10 ميقا','bad');
+        e.target.disabled=true;e.target.innerHTML='<span class="spin"></span> جاري رفع الملف';
+        const empId=(rq||[]).find(x=>x.id===id)?.employee_id;
+        const path=`${empId}/${id}/${Date.now()}.${(file.name.split('.').pop()||'pdf').toLowerCase().replace(/[^a-z0-9]/g,'')}`;
+        const {error:ue}=await sb.storage.from('hr-docs').upload(path,file,{contentType:file.type||'application/pdf'});
+        if(ue){e.target.disabled=false;e.target.textContent='تأكيد القبول';return toast('تعذر رفع الملف: '+ue.message,'bad')}
+        upd.attachment_path=path;upd.attachment_name=file.name}
+      const {error}=await sb.from(tb).update(upd).eq('id',id);
       if(fail(error))return;close();toast(st==='approved'?'تم القبول':'تم الرفض');reload()}})});
 }
 async function vAppr(v){v.innerHTML='<div id="ap"></div>';approvalsHTML($('#ap'),()=>vAppr(v))}
@@ -487,9 +511,9 @@ function dayStatus(p,date,rec,leaves,holidays){
   if(rec)return rec.status;
   if(holidays.includes(date))return 'holiday';
   if(leaves.some(l=>l.employee_id===p.id&&date>=l.start_date&&date<=l.end_date))return 'leave';
-  const sh=S.shifts.find(s=>s.id===p.shift_id);
+  const shs=S.shifts.filter(s=>empSh(p).includes(s.id));
   const dow=new Date(date+'T12:00:00Z').getUTCDay();
-  if(sh&&!sh.work_days.includes(dow))return 'off';
+  if(shs.length&&!shs.some(s=>s.work_days.includes(dow)))return 'off';
   return 'absent';
 }
 
@@ -507,7 +531,7 @@ async function aDash(box){
   const days=[...Array(7)].map((_,i)=>addDays(from,i));
   const per=days.map(d=>(att||[]).filter(a=>a.work_date===d).length);const max=Math.max(1,...per);
   const notIn=st.filter(x=>x.s==='absent'),lateL=st.filter(x=>x.s==='late');
-  const incomplete=active.filter(p=>!p.branch_id||!p.shift_id);
+  const incomplete=active.filter(p=>!empBr(p).length||!empSh(p).length);
   box.innerHTML=`
    ${incomplete.length?`<div class="alert warn" style="margin-top:6px">${incomplete.length} موظف بانتظار التفعيل (بدون فرع أو وردية). افتح قسم الموظفين وأكمل بياناتهم.</div>`:''}
    <h2>اليوم · ${fmtDate(t)}</h2>
@@ -549,7 +573,7 @@ async function aEmps(box,re){
    <div class="card list" style="margin-top:12px">${list.map(p=>`<div class="item" data-e="${p.id}" style="cursor:pointer"><div class="main">
      <div class="t">${esc(p.full_name)} ${!p.is_active?'<span class="pill p-mute">موقوف</span>':''}</div>
      <div class="small muted">${esc(p.job_title||'')}${p.job_title?' · ':''}${esc(S.departments.find(d=>d.id===p.department_id)?.name||'بدون قسم')}</div></div>
-     ${!p.branch_id||!p.shift_id?'<span class="pill p-warn">غير مكتمل</span>':empAlerts(p).length?`<span class="pill ${empAlerts(p).some(a=>a.lvl!=='soon')?'p-bad':'p-warn'}">وثيقة تنتهي</span>`:`<span class="pill p-info">${ROLES[p.role]}</span>`}</div>`).join('')||'<div class="empty">ما فيه نتائج</div>'}</div>`;
+     ${!empBr(p).length||!empSh(p).length?'<span class="pill p-warn">غير مكتمل</span>':empAlerts(p).length?`<span class="pill ${empAlerts(p).some(a=>a.lvl!=='soon')?'p-bad':'p-warn'}">وثيقة تنتهي</span>`:`<span class="pill p-info">${ROLES[p.role]}</span>`}</div>`).join('')||'<div class="empty">ما فيه نتائج</div>'}</div>`;
   const sq=$('#sq');sq.oninput=()=>{S.sub.q=sq.value;clearTimeout(sq._t);sq._t=setTimeout(()=>{aEmps(box,re).then(()=>{const n=$('#sq');n.focus();n.setSelectionRange(n.value.length,n.value.length)})},250)};
   box.querySelectorAll('[data-e]').forEach(el=>el.onclick=()=>editEmp(S.profiles.find(p=>p.id===el.dataset.e),re));
 }
@@ -564,8 +588,8 @@ function editEmp(p,re){
     <label class="f">نهاية العقد<input type="date" name="contract_end" value="${p.contract_end||''}"></label>
     <label class="f">انتهاء كرت العمل<input type="date" name="work_permit_expiry" value="${p.work_permit_expiry||''}"></label>
     <label class="f">انتهاء التأمين الطبي<input type="date" name="medical_insurance_expiry" value="${p.medical_insurance_expiry||''}"></label>
-    <label class="f">القسم${sel('department_id',S.departments,p.department_id)}</label><label class="f">الفرع (موقع البصمة)${sel('branch_id',S.branches,p.branch_id)}</label>
-    <label class="f">الوردية${sel('shift_id',S.shifts,p.shift_id)}</label><label class="f">المدير المباشر${sel('manager_id',S.profiles.filter(x=>x.id!==p.id),p.manager_id)}</label>
+    <label class="f">القسم${sel('department_id',S.departments,p.department_id)}</label><div class="f" style="grid-column:1/-1"><span>مواقع البصمة (اختر واحد أو أكثر)</span><div class="row small" style="gap:10px">${S.branches.map(b=>`<label class="row" style="gap:4px"><input type="checkbox" data-eb2="${b.id}" ${empBr(p).includes(b.id)?'checked':''}>${esc(b.name)}</label>`).join('')||'<span class="muted">أضف فرع من الإعدادات أولاً</span>'}</div></div>
+    <div class="f" style="grid-column:1/-1"><span>الورديات (اختر واحدة أو أكثر)</span><div class="row small" style="gap:10px">${S.shifts.map(s=>`<label class="row" style="gap:4px"><input type="checkbox" data-es2="${s.id}" ${empSh(p).includes(s.id)?'checked':''}>${esc(s.name)} <span class="muted num">${s.start_time.slice(0,5)}-${s.end_time.slice(0,5)}</span></label>`).join('')||'<span class="muted">أضف وردية من الإعدادات أولاً</span>'}</div></div><label class="f">المدير المباشر${sel('manager_id',S.profiles.filter(x=>x.id!==p.id),p.manager_id)}</label>
     <label class="f">الصلاحية<select name="role">${Object.entries(ROLES).map(([k,l])=>`<option value="${k}" ${p.role===k?'selected':''}>${l}</option>`).join('')}</select></label>
     <label class="f">تاريخ التعيين<input type="date" name="hire_date" value="${p.hire_date||''}"></label>
     <label class="f">الجنسية<input name="nationality" value="${esc(p.nationality||'')}"></label>
@@ -579,6 +603,8 @@ function editEmp(p,re){
     ${p.id!==S.me.id?'<button type="button" class="btn ghost block" id="erst">إعادة تعيين كلمة المرور</button>':''}</form>`,
   (el,close)=>{el.querySelector('#ex').onclick=close;el.querySelector('#erst')&&(el.querySelector('#erst').onclick=()=>{close();resetPw(p.id,re)});el.querySelector('#ef').onsubmit=async e=>{e.preventDefault();const f=form(e.target);
     ['basic_salary','housing_allowance','transport_allowance','other_allowance'].forEach(k=>f[k]=Number(f[k]||0));
+    f.branch_ids=[...el.querySelectorAll('[data-eb2]:checked')].map(c=>c.dataset.eb2);f.branch_id=f.branch_ids[0]||null;
+    f.shift_ids=[...el.querySelectorAll('[data-es2]:checked')].map(c=>c.dataset.es2);f.shift_id=f.shift_ids[0]||null;
     const {error}=await sb.from('profiles').update(f).eq('id',p.id);if(fail(error))return;close();toast('تم حفظ بيانات الموظف');if(p.id===S.me.id)await loadMe(p.id);re()}});
 }
 
@@ -673,6 +699,12 @@ async function aSet(box,re){
     if(error&&/foreign key/i.test(error.message))return toast('ما يمكن الحذف لأنه مرتبط بموظفين أو سجلات','bad');if(!fail(error))after('تم الحذف')});
 }
 
+async function openDoc(path,btn){
+  const w=window.open('','_blank');btn&&(btn.disabled=true);
+  const {data,error}=await sb.storage.from('hr-docs').createSignedUrl(path,600);btn&&(btn.disabled=false);
+  if(error||!data){w&&w.close();return toast('تعذر فتح الملف','bad')}
+  if(w)w.location=data.signedUrl;else location.href=data.signedUrl;
+}
 /* ---------- كلمة المرور ---------- */
 function forgotSheet(){
   sheet(`<form id="fgf" class="stack"><h3>نسيت كلمة المرور</h3>
@@ -738,6 +770,7 @@ function checkDate(date,key,title,sub,ref){
   const lvl=n<0?'expired':(ds.length>1&&stage>=ds.length?'urgent':'soon');
   return {date,key,title,sub,ref,n,stage,lvl};
 }
+const daysLeft2=(a,b)=>Math.round((Date.parse(b+'T00:00:00Z')-Date.parse(a+'T00:00:00Z'))/864e5)+1;
 const dueText=n=>n<0?`منتهية منذ ${-n} يوم`:n===0?'تنتهي اليوم':`تنتهي بعد ${n} يوم`;
 function empAlerts(p){if(!p||p.is_active===false)return [];
   const r=c=>({t:'emp',id:p.id,col:c});
