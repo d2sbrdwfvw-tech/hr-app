@@ -161,6 +161,7 @@ const SB_URL='https://tsvwdrtiuahewsjqgbvw.supabase.co';
 const SB_KEY='sb_publishable_MCuw1pbwxaCuXZt7EjoDuw_P-fGUqVg';
 const sb=supabase.createClient(SB_URL,SB_KEY);
 const TZ='Asia/Riyadh';
+const PUSH_PUB='BK3CgMH5ZMNDkhOkG_D1_Sc3z5De8OuTvse16p06oD0HAfFSmSV20o4bKMiroIM_vpEQqvCYYCzA5HbH4RrwBUA';
 const S={me:null,settings:null,branches:[],shifts:[],departments:[],leaveTypes:[],profiles:[],tab:'home',sub:{admin:'dash',req:'leave'}};
 const app=document.getElementById('app'),nav=document.getElementById('nav');
 
@@ -331,6 +332,7 @@ async function vHome(v){
   const pb=$('#pb');if(pb&&state!=='done')pb.onclick=()=>punch(state);
   const {data:rows}=await sb.from('attendance').select('*').eq('employee_id',S.me.id).order('work_date',{ascending:false}).limit(5);
   $('#recent').innerHTML=(rows||[]).length?rows.map(attItem).join(''):'<div class="empty">ما فيه سجلات حضور للحين</div>';
+  presenceBox($('#hr-box'));
   const mine=empAlerts(S.me);
   if(mine.length){const a=document.createElement('div');a.className='stack';a.style.marginTop='12px';
     a.innerHTML=mine.map(x=>`<div class="alert ${x.lvl==='soon'?'warn':'bad'} small">${esc(x.title)}: ${dueText(x.n)} (${fmtDate(x.date)}). راجع الموارد البشرية.</div>`).join('');
@@ -498,13 +500,13 @@ async function vAppr(v){v.innerHTML='<div id="ap"></div>';approvalsHTML($('#ap')
 
 /* ---------- الإدارة ---------- */
 async function vAdmin(v){
-  const subs=[['dash','لوحة التحكم'],['alerts',`التنبيهات${S.alertCount?` (${S.alertCount})`:''}`],['att','الحضور اليومي'],['emps','الموظفين'],['veh','المركبات'],['docs','وثائق المنشأة'],['appr','الموافقات'],['payroll','مسير الرواتب'],['set','الإعدادات']];
+  const subs=[['dash','لوحة التحكم'],['alerts',`التنبيهات${S.alertCount?` (${S.alertCount})`:''}`],['att','الحضور اليومي'],['emps','الموظفين'],['pres','تأكيد التواجد'],['veh','المركبات'],['docs','وثائق المنشأة'],['appr','الموافقات'],['payroll','مسير الرواتب'],['set','الإعدادات']];
   const sub=S.sub.admin;
   v.innerHTML=`<div class="chips" style="margin-top:12px">${subs.map(([k,l])=>`<button class="chip ${sub===k?'on':''}" data-s="${k}">${l}</button>`).join('')}</div><div id="ad"><div class="empty"><span class="spin"></span></div></div>`;
   v.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{S.sub.admin=c.dataset.s;vAdmin(v)});
   await loadProfiles();
   const box=$('#ad'),re=()=>vAdmin(v);
-  ({dash:aDash,alerts:aAlerts,att:aAtt,emps:aEmps,veh:aVeh,docs:aDocs,appr:b=>approvalsHTML(b,re),payroll:aPayroll,set:aSet}[sub])(box,re);
+  ({dash:aDash,alerts:aAlerts,att:aAtt,emps:aEmps,veh:aVeh,pres:aPres,docs:aDocs,appr:b=>approvalsHTML(b,re),payroll:aPayroll,set:aSet}[sub])(box,re);
 }
 
 function dayStatus(p,date,rec,leaves,holidays){
@@ -657,6 +659,12 @@ async function aSet(box,re){
   <h2>العطل الرسمية</h2><div class="card list">${(hol||[]).map(h=>`<div class="item"><div><div class="t">${esc(h.name)}</div><div class="small muted">${fmtDate(h.holiday_date)}</div></div>${del('holidays','holiday_date',h.holiday_date)}</div>`).join('')||'<div class="empty">ما فيه عطل مضافة</div>'}</div>
   <form id="hf" class="grid2" style="margin-top:10px"><input type="date" name="holiday_date" required><input name="name" required placeholder="اليوم الوطني"><button class="btn" style="grid-column:1/-1">إضافة عطلة</button></form>
 
+  <h2>تأكيد التواجد</h2><form id="pf" class="card stack">
+   <label class="row" style="justify-content:space-between"><b>تشغيل تأكيد التواجد</b><input type="checkbox" name="presence_enabled" id="pen" ${st.presence_enabled?'checked':''} style="width:22px;height:22px"></label>
+   <div class="grid2" id="pset"><label class="f">كم مرة باليوم لكل موظف<select name="presence_per_day">${[1,2,3,4,5].map(n=>`<option value="${n}" ${+st.presence_per_day===n?'selected':''}>${n===1?'مرة وحدة':n===2?'مرتين':n+' مرات'}</option>`).join('')}</select></label>
+   <label class="f">مهلة الرد<select name="presence_window_min">${[5,10,15,20,30].map(n=>`<option value="${n}" ${+st.presence_window_min===n?'selected':''}>${n} دقائق</option>`).join('')}</select></label></div>
+   <p class="small muted" style="margin:0">الأوقات تنحدد عشوائياً لكل موظف أول ما يبصم حضور، بين نص ساعة بعد حضوره ونص ساعة قبل نهاية ورديته. التغيير يطبق من البصمة الجاية.</p>
+   <button class="btn">حفظ</button></form>
   <h2>مواعيد التنبيهات</h2><div class="card list">
    <p class="small muted" style="margin:0 0 6px">كم يوم قبل الانتهاء يطلع التنبيه. تقدر تحط أكثر من موعد بينها فاصلة، مثل: 30، 15</p>
    ${Object.keys(ALERT_DEF).map(k=>`<div class="item"><span>${ALERT_DEF[k][0]}</span><input value="${alertDays(k).join('، ')}" data-ad="${k}" style="width:110px;text-align:center" dir="ltr" inputmode="numeric"></div>`).join('')}</div>
@@ -688,6 +696,9 @@ async function aSet(box,re){
   ['g_days','g_lam','g_mul'].forEach(id=>$('#'+id).oninput=ex);ex();
   $('#gf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);['gosi_employee_rate','working_days_per_month','late_absence_minutes','absence_multiplier'].forEach(k=>f[k]=Number(f[k]||0));
     const {error}=await sb.from('settings').update(f).eq('id',1);if(!fail(error))after('تم حفظ الإعدادات')};
+  const ps=()=>{$('#pset').style.opacity=$('#pen').checked?1:.45};$('#pen').onchange=ps;ps();
+  $('#pf').onsubmit=async e=>{e.preventDefault();const f=form(e.target);f.presence_per_day=+f.presence_per_day;f.presence_window_min=+f.presence_window_min;
+    const {error}=await sb.from('settings').update(f).eq('id',1);if(!fail(error))after(f.presence_enabled?'تم تشغيل تأكيد التواجد':'تم إيقاف تأكيد التواجد')};
   box.querySelectorAll('[data-ad]').forEach(i=>i.onchange=async()=>{
     const v=normDigits2(i.value).split(/[^0-9]+/).map(Number).filter(n=>n>0).sort((a,b)=>b-a);
     if(!v.length)return toast('اكتب رقم واحد على الأقل','bad');
@@ -705,6 +716,68 @@ async function openDoc(path,btn){
   if(error||!data){w&&w.close();return toast('تعذر فتح الملف','bad')}
   if(w)w.location=data.signedUrl;else location.href=data.signedUrl;
 }
+/* ---------- تأكيد التواجد ---------- */
+const PRES={ok:['في الموقع','p-ok'],outside:['خارج الموقع','p-bad'],missed:['ما رد','p-warn'],pending:['بانتظار الرد','p-info'],cancelled:['انصرف قبلها','p-mute']};
+const pushOK=()=>'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;
+function b64u(s){s=s.replace(/-/g,'+').replace(/_/g,'/');s+='='.repeat((4-s.length%4)%4);return Uint8Array.from(atob(s),c=>c.charCodeAt(0))}
+async function enablePush(btn){
+  if(isIOS&&!isStandalone()){showInstallSteps();return toast('أضف التطبيق للشاشة الرئيسية أولاً، وافتحه منها','bad')}
+  if(!pushOK())return toast('جوالك أو متصفحك ما يدعم الإشعارات، حدّث النظام','bad');
+  btn&&(btn.disabled=true);
+  try{
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){toast('لازم تسمح بالإشعارات من إعدادات الجوال','bad');return}
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64u(PUSH_PUB)});
+    const j=sub.toJSON();
+    const {error}=await sb.rpc('save_push_sub',{p_endpoint:j.endpoint,p_p256dh:j.keys.p256dh,p_auth:j.keys.auth});
+    if(fail(error))return;toast('تم تفعيل الإشعارات ✓');render();
+  }catch(e){toast('تعذر تفعيل الإشعارات: '+e.message,'bad')}finally{btn&&(btn.disabled=false)}
+}
+async function presenceBox(anchor){
+  const wrap=document.createElement('div');wrap.className='stack';wrap.style.marginTop='12px';anchor.before(wrap);
+  const win=+(S.settings?.presence_window_min||10);
+  const {data}=await sb.from('presence_checks').select('*').eq('employee_id',S.me.id).eq('status','pending').lte('scheduled_at',new Date().toISOString()).order('scheduled_at',{ascending:false}).limit(1);
+  const c=(data||[])[0];
+  if(c){const dl=new Date(c.scheduled_at).getTime()+win*60e3;
+    if(dl>Date.now()){
+      wrap.innerHTML=`<div class="card" style="border:2px solid var(--brand);text-align:center"><b style="font:700 18px var(--display)">أكّد تواجدك في موقع العمل</b>
+        <div class="small muted" id="pcd" style="margin:4px 0 10px"></div><button class="btn block" id="pcb">${I.pin.replace('<svg','<svg style="width:18px;height:18px;vertical-align:-4px"')} تأكيد التواجد</button></div>`;
+      const cd=()=>{const s=Math.max(0,Math.round((dl-Date.now())/1000));const e=$('#pcd');if(e)e.textContent=`باقي ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} على انتهاء المهلة`;if(!s)clearInterval(t)};const t=setInterval(cd,1000);cd();
+      $('#pcb').onclick=async e=>{const b=e.currentTarget;b.disabled=true;b.innerHTML='<span class="spin"></span> جاري تحديد موقعك';
+        let pos;try{pos=await getPos()}catch(err){toast(geoErr(err),'bad');b.disabled=false;b.textContent='تأكيد التواجد';return}
+        const {data:r,error}=await sb.rpc('confirm_presence',{p_lat:pos.coords.latitude,p_lng:pos.coords.longitude});
+        if(fail(error)){render();return}
+        toast(r?.status==='outside'?'تم التسجيل، لكنك خارج نطاق موقع العمل':'تم تأكيد تواجدك ✓',r?.status==='outside'?'bad':'');clearInterval(t);render()};
+    }
+  }
+  if(S.settings?.presence_enabled&&pushOK()&&Notification.permission!=='granted'){
+    const n=document.createElement('div');n.className='alert info small';n.style.cursor='pointer';
+    n.innerHTML='<b>فعّل الإشعارات</b> عشان يوصلك طلب تأكيد التواجد على جوالك. اضغط هنا ←';n.onclick=()=>enablePush();wrap.appendChild(n);
+  }else if(S.settings?.presence_enabled&&isIOS&&!isStandalone()){
+    const n=document.createElement('div');n.className='alert warn small';n.style.cursor='pointer';
+    n.innerHTML='عشان توصلك إشعارات تأكيد التواجد، أضف التطبيق للشاشة الرئيسية وافتحه منها. اضغط للطريقة ←';n.onclick=showInstallSteps;wrap.appendChild(n);
+  }
+}
+async function aPres(box,re){
+  const d=S.sub.presDate||todayStr();
+  const from=new Date(d+'T00:00:00+03:00').toISOString(),to=new Date(addDays(d,1)+'T00:00:00+03:00').toISOString();
+  const [{data}]=await Promise.all([sb.from('presence_checks').select('*').gte('scheduled_at',from).lt('scheduled_at',to).order('scheduled_at')]);
+  const rows=(data||[]).filter(c=>c.status!=='pending'||new Date(c.scheduled_at)<=new Date());
+  const cnt=k=>rows.filter(r=>r.status===k).length;
+  box.innerHTML=`<h2>تأكيد التواجد</h2>
+   ${S.settings.presence_enabled?'':'<div class="alert warn small">الخاصية متوقفة. شغّلها من الإعدادات.</div>'}
+   <input type="date" id="pd" value="${d}">
+   <div class="grid3" style="margin-top:12px"><div class="stat"><b style="color:var(--ok)">${cnt('ok')}</b><span>في الموقع</span></div>
+    <div class="stat"><b style="color:var(--bad)">${cnt('outside')}</b><span>خارج الموقع</span></div>
+    <div class="stat"><b style="color:var(--warn)">${cnt('missed')}</b><span>ما ردوا</span></div></div>
+   <div class="card list" style="margin-top:12px">${rows.length?rows.slice().reverse().map(c=>`<div class="item"><div class="main"><div class="t">${esc(nameOf(c.employee_id))}</div>
+     <div class="small muted num">أُرسل ${fmtTime(c.scheduled_at)}${c.responded_at?` · رد ${fmtTime(c.responded_at)}`:''}${c.distance_m!=null?` · يبعد ${c.distance_m} م`:''}</div></div>${pill(PRES,c.status)}</div>`).join(''):'<div class="empty">ما فيه طلبات تأكيد في هذا اليوم</div>'}</div>
+   <p class="small muted">الموظف اللي ما فعّل الإشعارات يشوف طلب التأكيد بس إذا فتح التطبيق خلال المهلة.</p>`;
+  $('#pd').onchange=e=>{S.sub.presDate=e.target.value;aPres(box,re)};
+}
+
 /* ---------- كلمة المرور ---------- */
 function forgotSheet(){
   sheet(`<form id="fgf" class="stack"><h3>نسيت كلمة المرور</h3>
